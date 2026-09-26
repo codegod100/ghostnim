@@ -78,6 +78,14 @@ the event loop.
   files are added or removed; hidden files are left out. Drag the divider to
   resize the pane; whether it's shown and its width are remembered in
   `$XDG_STATE_HOME/ghostnim`.
+  Showing the pane gives it the keyboard (its selection turns the accent
+  colour and the terminal's cursor goes hollow): Up/Down, PageUp/PageDown
+  and Home/End move, Enter or Right goes into a folder or opens a file,
+  Left or Backspace goes up to the parent folder, typing a name's first
+  letters jumps to it, Shift+Enter types the selected path into the
+  terminal, and Escape (or a click in the terminal) hands the keyboard back.
+  Ctrl+Shift+E focuses a pane that's already shown, and hides it once it has
+  focus.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours

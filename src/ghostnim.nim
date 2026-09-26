@@ -42,7 +42,7 @@ Keys (defaults; change them in the config file's keybinds block):
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font (also Ctrl++)
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
-  Ctrl+Shift+E                  show / hide the file manager
+  Ctrl+Shift+E                  show and focus / hide the file manager
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 
 Drag to select text, double-click to select a word, path or URL, and
@@ -61,7 +61,10 @@ to cd there.
 Ctrl+Shift+E shows the file manager, split off the left of the window. It
 lists the current tab's folder: click a folder to cd there, double-click a
 file to open it, middle-click a file to type its path into the terminal (or a
-folder to open a new tab there), and drag the divider to resize it.
+folder to open a new tab there), and drag the divider to resize it. While it
+has focus: arrows, PageUp/PageDown and Home/End move, Enter opens, Left or
+Backspace goes up, typing jumps to a name, Shift+Enter types the path into
+the terminal and Escape returns to it.
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
@@ -168,6 +171,10 @@ type
     paneCwd: string            ## that tab's directory when last looked at
     paneChecked: uint32        ## ticks of the last look for changes in the folder
     resizingPane: bool         ## the divider is being dragged
+    paneFocused: bool          ## keys go to the file pane, not the terminal
+    typeAhead: string          ## what's been typed to find a file pane entry
+    typeAheadAt: uint32        ## ticks of the last key typed into it
+    windowFocused: bool
 
 proc cur(app: App): Tab {.inline.} = app.tabs[app.active]
 
@@ -720,13 +727,6 @@ proc savePaneState(app: App) =
     stderr.writeLine "ghostnim: can't save the file manager setting: " &
                      getCurrentExceptionMsg().splitLines[0]
 
-proc toggleFilePane(app: App) =
-  app.paneOn = not app.paneOn
-  app.paneTab = -1
-  app.pane.hovered = -1
-  app.applySize()
-  app.savePaneState()
-
 proc syncPane(app: App) =
   ## Keep the pane on the current tab's directory, and its listing current.
   if not app.paneOn: return
@@ -746,6 +746,30 @@ proc syncPane(app: App) =
   app.paneChecked = now
   app.pane.refresh()
 
+proc focusPane(app: App, on: bool) =
+  ## Give the keyboard to the file pane, or back to the terminal (whose
+  ## cursor then shows it has focus again).
+  let on = on and app.paneOn
+  if on == app.paneFocused: return
+  app.paneFocused = on
+  app.typeAhead = ""
+  app.rd.focused = app.windowFocused and not on
+  app.needsFull = true
+
+proc toggleFilePane(app: App, focusFirst = false) =
+  ## Show the file pane and focus it, or hide it. With `focusFirst` (the
+  ## shortcut), a pane that's shown but not focused gets focused instead.
+  if focusFirst and app.paneOn and not app.paneFocused:
+    app.focusPane(true)
+    return
+  app.paneOn = not app.paneOn
+  app.paneTab = -1
+  app.pane.hovered = -1
+  app.applySize()
+  app.savePaneState()
+  app.syncPane()             # list the folder now, for the keyboard
+  app.focusPane(app.paneOn)
+
 proc paneOpenDir(app: App, dir: string) =
   ## Show `dir` in the pane, and cd the shell there when it's at its prompt.
   if not dirExists(dir):
@@ -755,8 +779,69 @@ proc paneOpenDir(app: App, dir: string) =
     app.sendInput("cd " & quoteShell(dir) & "\r")
   app.pane.load(dir)
 
+proc paneRows(app: App): int = app.rd.visibleRows(app.outputSize()[1])
+
+proc paneOpen(app: App) =
+  ## Enter on the selected entry: go into a folder, open a file.
+  let i = app.pane.selected
+  if i < 0: return
+  let path = app.pane.path(i)
+  if app.pane.entries[i].isDir:
+    let parent = app.pane.entries[i].name == ".."
+    let came = app.pane.dir.lastPathPart
+    app.paneOpenDir(path)
+    app.pane.selectName(if parent: came else: "", app.paneRows)
+  else:
+    openExternal(path)
+
+proc paneUp(app: App) =
+  ## Go to the parent folder, with the one we were in selected.
+  if app.pane.dir.len == 0 or app.pane.dir == "/": return
+  let came = app.pane.dir.lastPathPart
+  app.paneOpenDir(app.pane.dir.parentDir)
+  app.pane.selectName(came, app.paneRows)
+
+proc paneKey(app: App, e: KeyboardEvent) =
+  ## Keyboard handling while the file pane has focus; nothing reaches the
+  ## terminal. Printable keys come back through SDL_TEXTINPUT as type-ahead.
+  app.hasPendingKey = false
+  app.suppressText = false
+  let rows = app.paneRows
+  let shift = (e.keysym.`mod` and KMOD_SHIFT) != 0
+  let sel = app.pane.selected
+  case toGhosttyKey(e.keysym.scancode)
+  of gkArrowDown: app.pane.select(sel + 1, rows)
+  of gkArrowUp: app.pane.select(if sel < 0: 0 else: sel - 1, rows)
+  of gkPageDown: app.pane.select(sel + max(1, rows - 1), rows)
+  of gkPageUp: app.pane.select(sel - max(1, rows - 1), rows)
+  of gkHome: app.pane.select(0, rows)
+  of gkEnd: app.pane.select(app.pane.entries.len - 1, rows)
+  of gkEnter, gkNumpadEnter:
+    if shift and sel >= 0:
+      # Type the path into the terminal and go back to it.
+      app.sendInput(quoteShell(app.pane.path(sel)) & " ")
+      app.focusPane(false)
+    else:
+      app.paneOpen()
+  of gkArrowRight:
+    if sel >= 0 and app.pane.entries[sel].isDir: app.paneOpen()
+  of gkArrowLeft, gkBackspace: app.paneUp()
+  of gkEscape: app.focusPane(false)
+  else: return
+  app.typeAhead = ""
+
+proc paneTypeAhead(app: App, text: string) =
+  ## Letters typed into the focused pane select the entry they start.
+  if text.strip.len == 0: return
+  let now = getTicks()
+  if now - app.typeAheadAt > 1000: app.typeAhead = ""
+  app.typeAheadAt = now
+  app.typeAhead.add text
+  app.pane.jumpTo(app.typeAhead, app.paneRows)
+
 proc onPaneClick(app: App, button, clicks: uint8, x, y: int) =
   let (_, h) = app.outputSize()
+  app.focusPane(true)
   let i = app.pane.entryAt(app.rd, x, y, h)
   if i < 0: return
   let path = app.pane.path(i)
@@ -837,7 +922,7 @@ proc runAction(app: App, b: Binding) =
   of acSendText: app.sendInput(b.text)
   of acReloadConfig: app.reloadConfig()
   of acOpenConfig: app.openConfig()
-  of acToggleFilePane: app.toggleFilePane()
+  of acToggleFilePane: app.toggleFilePane(focusFirst = true)
 
 proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
   ## Keybindings from the config (or the defaults). True if the key was used.
@@ -861,6 +946,9 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
     # A binding like shift+a or alt+1 would also type its character.
     app.hasPendingKey = false
     app.suppressText = producesText(sym, smods)
+    return
+  if app.paneFocused:
+    app.paneKey(e)
     return
   app.suppressText = false
   let key = toGhosttyKey(e.keysym.scancode)
@@ -886,7 +974,7 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
 
 proc onKeyUp(app: App, e: KeyboardEvent) =
   # Only emitted when the kitty keyboard protocol asks for release events.
-  if app.menu.open: return
+  if app.menu.open or app.paneFocused: return
   app.encodeKey(toGhosttyKey(e.keysym.scancode), GHOSTTY_KEY_ACTION_RELEASE,
                 toGhosttyMods(e.keysym.`mod`), unshiftedCodepoint(e.keysym.sym), "")
 
@@ -896,6 +984,9 @@ proc onTextInput(app: App, e: TextInputEvent) =
     app.suppressText = false
     return
   if app.menu.open: return
+  if app.paneFocused:
+    app.paneTypeAhead(text)
+    return
   if app.hasPendingKey:
     app.hasPendingKey = false
     app.encodeKey(app.pendingKey, GHOSTTY_KEY_ACTION_PRESS, app.pendingMods,
@@ -1182,6 +1273,7 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
         app.ownButtons.incl e.button
         app.onPaneClick(e.button, e.clicks, px.int, py.int)
       return
+    app.focusPane(false)     # a click in the terminal gives it the keyboard back
     if e.button == BUTTON_LEFT and linkModifier():
       # Ctrl+click on a link opens it, even when the app reports the mouse.
       # A directory (a file:// link to one, or a path in the text) opens in
@@ -1308,7 +1400,8 @@ proc handleEvent(app: App, e: var Event) =
       app.pane.hovered = -1
     of WINDOWEVENT_FOCUS_GAINED, WINDOWEVENT_FOCUS_LOST:
       if e.window.event == WINDOWEVENT_FOCUS_LOST: app.menu.close()
-      app.rd.focused = e.window.event == WINDOWEVENT_FOCUS_GAINED
+      app.windowFocused = e.window.event == WINDOWEVENT_FOCUS_GAINED
+      app.rd.focused = app.windowFocused and not app.paneFocused
       app.needsFull = true
     else: discard
 
@@ -1364,7 +1457,8 @@ proc main() =
   defer: ttfQuit()
 
   let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
-                needsFull: true, folderHover: -1, pane: initFilePane(), paneTab: -1)
+                needsFull: true, folderHover: -1, pane: initFilePane(), paneTab: -1,
+                windowFocused: true)
   app.loadPaneState()
   let fontPaths = resolveFonts(opts.font)
 
@@ -1424,7 +1518,7 @@ proc main() =
     app.trackDirs()
     app.syncPane()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
-    app.pane.draw(app.rd, app.outputSize()[1])
+    app.pane.draw(app.rd, app.outputSize()[1], app.paneFocused and app.windowFocused)
     app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
     app.rd.drawFolderBar(app.folderLabels, app.folderHover)
     app.menu.draw(app.rd)

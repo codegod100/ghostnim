@@ -110,6 +110,40 @@ proc entryAt*(p: FilePane, rd: Renderer, x, y, outH: int): int =
 proc scrollBy*(p: var FilePane, rd: Renderer, delta, outH: int) =
   p.scroll = clamp(p.scroll + delta, 0, max(0, p.entries.len - rd.visibleRows(outH)))
 
+# --- keyboard --------------------------------------------------------------------
+
+proc select*(p: var FilePane, i, rows: int) =
+  ## Select entry `i` (clamped), scrolling it into view in a pane showing
+  ## `rows` entries.
+  if p.entries.len == 0:
+    p.selected = -1
+    return
+  p.selected = clamp(i, 0, p.entries.len - 1)
+  let rows = max(1, rows)
+  if p.selected < p.scroll: p.scroll = p.selected
+  elif p.selected >= p.scroll + rows: p.scroll = p.selected - rows + 1
+
+proc selectName*(p: var FilePane, name: string, rows: int) =
+  ## Select the entry called `name`, else the first one after "..".
+  for i, e in p.entries:
+    if e.name == name:
+      p.select(i, rows)
+      return
+  p.select(if p.entries.len > 1 and p.entries[0].name == "..": 1 else: 0, rows)
+
+proc jumpTo*(p: var FilePane, prefix: string, rows: int) =
+  ## Type-ahead: select the next entry whose name starts with `prefix`. A
+  ## one-letter prefix moves on from the selected entry, so repeating it
+  ## cycles through the matches; a longer one may stay on it.
+  let n = p.entries.len
+  if n == 0 or prefix.len == 0: return
+  let start = if prefix.len == 1: p.selected + 1 else: max(0, p.selected)
+  for k in 0 ..< n:
+    let i = (start + k) mod n
+    if p.entries[i].name.toLowerAscii.startsWith(prefix.toLowerAscii):
+      p.select(i, rows)
+      return
+
 # --- drawing -------------------------------------------------------------------
 
 proc mix(a, b: Rgb, t: float): Rgb =
@@ -145,8 +179,9 @@ proc drawFileIcon(rd: Renderer, x, y, w, h: int, c: Rgb) =
   rd.fillRect(x, y, l, h)
   rd.fillRect(x + w - l, y, l, h)
 
-proc draw*(p: FilePane, rd: Renderer, outH: int) =
-  ## Composite the pane onto the backbuffer, in the terminal's colours.
+proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
+  ## Composite the pane onto the backbuffer, in the terminal's colours. With
+  ## keyboard focus, the selected entry is highlighted in the accent colour.
   if rd.left <= 0: return
   let bg = rgb(rd.colors.background)
   let fg = rgb(rd.colors.foreground)
@@ -173,7 +208,8 @@ proc draw*(p: FilePane, rd: Renderer, outH: int) =
     let e = p.entries[i]
     let y = rd.listY + (i - p.scroll) * rd.rowH
     if i == p.selected or i == p.hovered:
-      rd.setColor(mix(bg, fg, if i == p.selected: 0.16 else: 0.08))
+      rd.setColor(if i == p.selected and focused: mix(bg, accent, 0.35)
+                  else: mix(bg, fg, if i == p.selected: 0.16 else: 0.08))
       rd.fillRect(0, y, rd.left, rd.rowH)
     let iy = y + (rd.rowH - iconH) div 2
     if e.isDir: rd.drawFolderIcon(rd.padX, iy, iconW, iconH, mix(bg, accent, 0.85))
