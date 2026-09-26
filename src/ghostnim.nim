@@ -843,7 +843,7 @@ proc updateLinkCursor(app: App) =
     app.overLink = over
     setCursor(if over: app.handCursor else: app.arrowCursor)
 
-proc onTabBarClick(app: App, button: uint8, x, y: int32) =
+proc onTabBarClick(app: App, button, clicks: uint8, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let hit = app.rd.hitTabBar(app.tabs.len, px.int, py.int)
   case hit.kind
@@ -854,7 +854,9 @@ proc onTabBarClick(app: App, button: uint8, x, y: int32) =
     if button in {BUTTON_LEFT, BUTTON_MIDDLE}: app.closeTab(hit.index)
   of hitNew:
     if button == BUTTON_LEFT: app.addTab()
-  of hitNone: discard
+  of hitNone:
+    # Double-clicking the empty bar space opens a new tab.
+    if button == BUTTON_LEFT and clicks == 2: app.addTab()
 
 proc sendMouse(app: App, action: cint, button: cint, x, y: int32) =
   let ev = app.mouseEvent
@@ -920,7 +922,7 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
   if down and not app.menu.open and app.mouseButtons.len == 0:
     if app.inTabBar(e.y):
       app.ownButtons.incl e.button
-      app.onTabBarClick(e.button, e.x, e.y)
+      app.onTabBarClick(e.button, e.clicks, e.x, e.y)
       return
     if e.button == BUTTON_LEFT and linkModifier():
       # Ctrl+click on a link opens it, even when the app reports the mouse.
