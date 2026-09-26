@@ -18,11 +18,14 @@ type
 
   FilePane* = object
     dir*: string              ## the folder listed
-    entries*: seq[Entry]      ## ".." (except at /), then folders, then files
+    all: seq[Entry]           ## ".." (except at /), then folders, then files
+    entries*: seq[Entry]      ## those of `all` matching the filter
     stamp: Time               ## the folder's mtime when it was listed
     scroll*: int              ## first entry shown
     hovered*, selected*: int  ## entry indexes, -1 for none
     showHidden*: bool         ## list dotfiles too
+    filter*: string           ## only list names containing this (any case)
+    filtering*: bool          ## typing goes into the filter
 
 proc initFilePane*(): FilePane = FilePane(hovered: -1, selected: -1)
 
@@ -56,15 +59,25 @@ proc path*(p: FilePane, i: int): string =
   ## The full path of entry `i`.
   if p.entries[i].name == "..": p.dir.parentDir else: p.dir / p.entries[i].name
 
+proc matches(e: Entry, filter: string): bool =
+  filter.len == 0 or
+    (e.name != ".." and filter.toLowerAscii in e.name.toLowerAscii)
+
 proc load*(p: var FilePane, dir: string) =
-  ## List `dir`, from the top unless it's the folder already shown.
+  ## List `dir`, from the top and unfiltered unless it's the folder already
+  ## shown.
   if dir != p.dir:
     p.scroll = 0
     p.selected = -1
     p.hovered = -1
+    p.filter = ""
+    p.filtering = false
   p.dir = dir
   p.stamp = mtime(dir)
-  p.entries = list(dir, p.showHidden)
+  p.all = list(dir, p.showHidden)
+  p.entries = @[]
+  for e in p.all:
+    if e.matches(p.filter): p.entries.add e
   p.scroll = min(p.scroll, max(0, p.entries.len - 1))
   if p.selected >= p.entries.len: p.selected = -1
 
@@ -91,6 +104,20 @@ proc setShowHidden*(p: var FilePane, on: bool) =
   if on == p.showHidden: return
   p.showHidden = on
   if p.dir.len > 0: p.reload()
+
+proc setFilter*(p: var FilePane, filter: string) =
+  ## List only the names containing `filter`, keeping the selected entry if
+  ## it still matches, else selecting the first match.
+  let selName = if p.selected >= 0: p.entries[p.selected].name else: ""
+  p.filter = filter
+  p.entries = @[]
+  for e in p.all:
+    if e.matches(filter): p.entries.add e
+  p.hovered = -1
+  p.scroll = 0
+  p.selected = if p.entries.len > 0: 0 else: -1
+  for i, e in p.entries:
+    if e.name == selName: p.selected = i
 
 # --- geometry ------------------------------------------------------------------
 
@@ -219,9 +246,17 @@ proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
   rd.fillRect(0, rd.top, rd.left, outH - rd.top)
   let chars = (rd.left - 2 * rd.padX) div rd.cellW
 
-  # Header: the folder, and a line under it.
-  rd.drawText(fit(displayPath(p.dir), chars, fromLeft = true), rd.padX,
-              rd.top + (rd.headerH - rd.cellH) div 2, mix(bg, fg, 0.6))
+  # Header: the folder, or the filter while there is one, and a line under it.
+  let textY = rd.top + (rd.headerH - rd.cellH) div 2
+  if p.filtering or p.filter.len > 0:
+    let shown = fit("/" & p.filter, chars - 1, fromLeft = true)
+    rd.drawText(shown, rd.padX, textY, if p.filtering: fg else: mix(bg, fg, 0.6))
+    if p.filtering and focused:                    # a caret after it
+      rd.setColor(accent)
+      rd.fillRect(rd.padX + shown.runeLen * rd.cellW, textY, max(1, 2 * l), rd.cellH)
+  else:
+    rd.drawText(fit(displayPath(p.dir), chars, fromLeft = true), rd.padX, textY,
+                mix(bg, fg, 0.6))
   rd.setColor(mix(bg, fg, 0.12))
   rd.fillRect(0, rd.listY - l, rd.left, l)
 
@@ -244,6 +279,9 @@ proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
                           iconH + iconH div 3, mix(bg, fg, max(0.35, 0.45 * dim)))
     let textT = if e.isDir or i == p.selected: 1.0 else: 0.75
     rd.drawText(fit(e.name, nameChars), nameX, y + rd.padY, mix(bg, fg, textT * dim))
+
+  if p.entries.len == 0 and p.filter.len > 0:
+    rd.drawText(fit("No matches", chars), rd.padX, rd.listY + rd.padY, mix(bg, fg, 0.45))
 
   # Scrollbar, when not everything fits.
   if p.entries.len > rows and rows > 0:

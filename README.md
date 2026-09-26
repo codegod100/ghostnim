@@ -89,6 +89,11 @@ the event loop.
   Left or Backspace goes up to the parent folder, typing a name's first
   letters jumps to it, Shift+Enter types the selected path into the
   terminal, and Escape (or a click in the terminal) hands the keyboard back.
+  To filter the listing by name, press `/` or Ctrl+F in the pane (or pick
+  Filter Files from the right-click menu) and type: only entries whose names
+  contain the text (in any case) are listed, with the filter shown in the
+  pane's header. Backspace edits it, Enter opens the selected match, and
+  Escape clears the filter; going to another folder clears it too.
   Ctrl+Shift+E focuses a pane that's already shown, and hides it once it has
   focus.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
