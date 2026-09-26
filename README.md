@@ -60,6 +60,15 @@ This clones Ghostty at a pinned commit into `vendor/ghostty-src` and installs
 headers and libraries into `vendor/ghostty-vt`. To use a libghostty-vt you
 already have, set `GHOSTTY_VT_PREFIX=/path/to/prefix`.
 
+The bindings need a recent libghostty-vt (with the sized render-state structs
+such as `GhosttyRenderStateColors`). If the build stops with "libghostty-vt
+headers ... are too old", or the C compiler reports `unknown type name
+'GhosttyRenderStateColors'`, the installed headers are stale. Rebuild them:
+
+```sh
+rm -rf vendor/ghostty-vt && nimble vt
+```
+
 ### 3. Build ghostnim
 
 ```sh

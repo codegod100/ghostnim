@@ -6,7 +6,24 @@
 ##
 ## Header reference: https://github.com/ghostty-org/ghostty/tree/main/include/ghostty/vt
 
+import std/[os, strutils]
+
 const vtHeader = "ghostty/vt.h"
+
+const ghosttyVtInclude {.strdefine.} = ""
+  ## Set by config.nims to the libghostty-vt include directory.
+
+when ghosttyVtInclude.len > 0:
+  # Fail early with a useful message when the headers are missing or predate
+  # the API these bindings target (e.g. a stale ./vendor/ghostty-vt).
+  const renderH = ghosttyVtInclude / "ghostty" / "vt" / "render.h"
+  when not fileExists(renderH):
+    {.error: "libghostty-vt headers not found in " & ghosttyVtInclude &
+      ". Run `nimble vt` (or set GHOSTTY_VT_PREFIX).".}
+  elif "} GhosttyRenderStateColors;" notin staticRead(renderH):
+    {.error: "libghostty-vt headers in " & ghosttyVtInclude & " are too old " &
+      "for ghostnim (no GhosttyRenderStateColors). Rebuild with " &
+      "`rm -rf vendor/ghostty-vt && nimble vt`.".}
 
 {.pragma: vt, importc, header: vtHeader.}
 {.pragma: vtType, importc, header: vtHeader, bycopy.}
