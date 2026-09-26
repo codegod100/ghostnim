@@ -2,12 +2,14 @@
 ## (U+2580–U+259F) characters, so lines and blocks join seamlessly across
 ## cells regardless of the font's metrics (Ghostty does the same).
 
+import std/math
 import sdl
 
 const
   # Arm weights for U+2500..U+257F, packed as 2 bits each: up, right, down,
   # left (0 none, 1 light, 2 heavy, 3 double). 0 means "not handled" (the
   # diagonals), which falls back to the font. Generated from Unicode names.
+  # The rounded corners U+256D..U+2570 are drawn as arcs by `drawArc`.
   boxArms: array[128, uint8] = [
   0b00010001'u8, 0b00100010'u8, 0b01000100'u8, 0b10001000'u8, 0b00010001'u8, 0b00100010'u8, 0b01000100'u8, 0b10001000'u8,  # U+2500
   0b00010001'u8, 0b00100010'u8, 0b01000100'u8, 0b10001000'u8, 0b00010100'u8, 0b00100100'u8, 0b00011000'u8, 0b00101000'u8,  # U+2508
@@ -33,7 +35,54 @@ proc isSpecial*(cp: uint32): bool =
   (cp >= 0x2500'u32 and cp <= 0x257F'u32 and boxArms[cp - 0x2500] != 0) or
     (cp >= 0x2580'u32 and cp <= 0x259F'u32)
 
+proc drawArc(cp: uint32, x, y, w, h: int, fill: FillFn) =
+  ## Rounded corners U+256D..U+2570: a quarter circle joining the centre
+  ## lines, antialiased by stroke coverage, with straight runs to the edges.
+  let light = max(1, (min(w, h) + 4) div 9)
+  let cx = x + (w - light) div 2
+  let cy = y + (h - light) div 2
+  let midX = float(cx) + float(light) / 2
+  let midY = float(cy) + float(light) / 2
+  # Direction of the horizontal (sx) and vertical (sy) arms.
+  let (sx, sy) = case cp
+    of 0x256D: (1, 1)     # ╭ right + down
+    of 0x256E: (-1, 1)    # ╮ left + down
+    of 0x256F: (-1, -1)   # ╯ left + up
+    else: (1, -1)         # ╰ right + up
+  # Largest radius that keeps the arc inside the cell.
+  let rx = (if sx > 0: float(x + w) - midX else: midX - float(x))
+  let ry = (if sy > 0: float(y + h) - midY else: midY - float(y))
+  let r = max(1.0, min(rx, ry) - float(light) / 2)
+  let ocx = midX + float(sx) * r    # circle centre
+  let ocy = midY + float(sy) * r
+  # Straight runs from where the arc ends to the cell edges.
+  let ex = int(ocx + 0.5)
+  let ey = int(ocy + 0.5)
+  if sx > 0: fill(ex, cy, x + w - ex, light, 255)
+  else: fill(x, cy, ex - x, light, 255)
+  if sy > 0: fill(cx, ey, light, y + h - ey, 255)
+  else: fill(cx, y, light, ey - y, 255)
+  # The arc itself, over the quadrant between the centre lines and the
+  # circle centre.
+  let half = float(light) / 2
+  let x0 = max(x, int(min(midX - half, ocx)) - 1)
+  let x1 = min(x + w, int(max(midX + half, ocx)) + 1)
+  let y0 = max(y, int(min(midY - half, ocy)) - 1)
+  let y1 = min(y + h, int(max(midY + half, ocy)) + 1)
+  for py in y0 ..< y1:
+    for px in x0 ..< x1:
+      let fx = float(px) + 0.5
+      let fy = float(py) + 0.5
+      if (fx - ocx) * float(sx) > 0.5 or (fy - ocy) * float(sy) > 0.5:
+        continue
+      let d = sqrt((fx - ocx) * (fx - ocx) + (fy - ocy) * (fy - ocy))
+      let cov = clamp(half + 0.5 - abs(d - r), 0.0, 1.0)
+      if cov > 0: fill(px, py, 1, 1, uint8(cov * 255))
+
 proc drawBox(cp: uint32, x, y, w, h: int, fill: FillFn) =
+  if cp >= 0x256D'u32 and cp <= 0x2570'u32:
+    drawArc(cp, x, y, w, h, fill)
+    return
   let arms = boxArms[cp - 0x2500]
   let up = int((arms shr 6) and 3)
   let right = int((arms shr 4) and 3)
@@ -43,6 +92,7 @@ proc drawBox(cp: uint32, x, y, w, h: int, fill: FillFn) =
   let heavy = light * 2
   proc thick(weight: int): int =
     case weight
+    of 0: 0
     of 1: light
     of 2: heavy
     else: light * 3   # double: two light strokes with a light-sized gap
