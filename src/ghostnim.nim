@@ -33,6 +33,7 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
+  Ctrl+Shift+,                  reload the config file (also automatic on save)
 
 Right-click opens a menu with copy, paste, select all and zoom (hold Shift
 to open it when the application has mouse reporting on).
@@ -44,6 +45,14 @@ plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
+  Cli = object
+    ## What the command line set. It wins over the config file, on every
+    ## reload too; empty/zero fields were not given.
+    configPath, font, workingDirectory, screenshot: string
+    size, cols, rows: int
+    scrollback: int          ## -1 when not given
+    command: seq[string]
+
   Options = object
     font: string
     size: int
@@ -74,6 +83,9 @@ type
 
   App = ref object
     opts: Options
+    cli: Cli
+    configStamp: ConfigStamp   ## the config file as last loaded
+    configChecked: uint32      ## ticks of the last check for changes
     window: WindowPtr
     rd: Renderer
     tabs: seq[Tab]
@@ -186,24 +198,78 @@ proc updateWindowTitle(app: App) =
   let title = app.cur.title
   setWindowTitle(app.window, if title.len > 0: title.cstring else: "ghostnim")
 
+# --- options ----------------------------------------------------------------
+
+proc parseCli(): Cli =
+  result.scrollback = -1
+  let args = commandLineParams()
+  var i = 0
+  proc need(i: var int): string =
+    inc i
+    if i >= args.len:
+      quit("ghostnim: missing value for " & args[i - 1], 2)
+    args[i]
+  while i < args.len:
+    let a = args[i]
+    case a
+    of "-h", "--help": echo usage; quit(0)
+    of "-c", "--config": result.configPath = need(i)
+    of "-f", "--font": result.font = need(i)
+    of "-s", "--size": result.size = parseInt(need(i))
+    of "--cols": result.cols = parseInt(need(i))
+    of "--rows": result.rows = parseInt(need(i))
+    of "--scrollback": result.scrollback = parseInt(need(i))
+    of "-d", "--working-directory":
+      result.workingDirectory = expandTilde(need(i))
+      if not dirExists(result.workingDirectory):
+        quit("ghostnim: no such directory: " & result.workingDirectory, 2)
+    of "--screenshot": result.screenshot = need(i)
+    of "-e", "--exec":
+      result.command = args[i + 1 .. ^1]
+      break
+    else:
+      quit("ghostnim: unknown option " & a & "\n\n" & usage, 2)
+    inc i
+
+proc merge(cfg: Config, cli: Cli): Options =
+  ## The config file's settings with the command line's on top.
+  template pick(c, f: untyped): untyped = (if c: cli.f else: cfg.f)
+  result = Options(
+    font: pick(cli.font.len > 0, font),
+    size: pick(cli.size > 0, size),
+    cols: pick(cli.cols > 0, cols),
+    rows: pick(cli.rows > 0, rows),
+    scrollback: pick(cli.scrollback >= 0, scrollback),
+    command: pick(cli.command.len > 0, command),
+    workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
+    colors: cfg.colors, keybinds: cfg.keybinds, screenshot: cli.screenshot)
+  if result.command.len == 0: result.command = @[defaultShell()]
+
 # --- tabs -------------------------------------------------------------------
 
 proc applyColors(app: App, term: GhosttyTerminal) =
   ## The config file's colours become the terminal's defaults, which programs
-  ## can still override with OSC 4/10/11/12.
+  ## can still override with OSC 4/10/11/12. Unset ones go back to built-in.
   let c = app.opts.colors
   proc toVt(c: ConfigRgb): GhosttyColorRgb = GhosttyColorRgb(r: c.r, g: c.g, b: c.b)
   for (opt, col) in [(GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, c.foreground),
                      (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, c.background),
                      (GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, c.cursor)]:
-    if col.isSome:
-      var v = toVt(col.get)
-      discard ghostty_terminal_set(term, opt, addr v)
+    var v = toVt(col.get((0'u8, 0'u8, 0'u8)))
+    discard ghostty_terminal_set(term, opt, if col.isSome: addr v else: nil)
+  # Reset first, so PALETTE_DEFAULT is the built-in palette, not the last config's.
+  discard ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, nil)
   if c.palette.len > 0:
     var pal: array[256, GhosttyColorRgb]
     discard ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, addr pal)
     for (i, col) in c.palette: pal[i] = toVt(col)
     discard ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, addr pal)
+
+proc applySelectionColors(app: App) =
+  template toRgb(c: Option[ConfigRgb]): Option[Rgb] =
+    (if c.isSome: some(Rgb(r: c.get.r, g: c.get.g, b: c.get.b)) else: none(Rgb))
+  app.rd.selectionFg = toRgb(app.opts.colors.selectionForeground)
+  app.rd.selectionBg = toRgb(app.opts.colors.selectionBackground)
 
 proc newTab(app: App, cwd = ""): Tab =
   ## A terminal plus a child on a pty, sized to the current window.
@@ -414,6 +480,42 @@ proc zoom(app: App, size: int) =
   app.rd.setFontSize(size)
   app.applySize()
 
+proc reloadConfig(app: App) =
+  ## Re-read the config file and apply it. Window size (cols/rows) only
+  ## matters at startup; command and working-directory apply to new tabs.
+  app.configStamp = stamp(configFile(app.cli.configPath))
+  let cfg = reloadConfig(app.cli.configPath)
+  if cfg.isNone: return            # unreadable or invalid: keep what we have
+  let old = app.opts
+  var o = merge(cfg.get, app.cli)
+  o.screenshot = old.screenshot
+  app.opts = o
+  for tab in app.tabs:
+    app.applyColors(tab.term)
+    var sb = csize_t(o.scrollback)
+    discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, addr sb)
+  app.applySelectionColors()
+  var fontChanged = false
+  if o.font != old.font:
+    try:
+      app.rd.setFonts(resolveFonts(o.font))
+      fontChanged = true
+    except IOError as e:
+      stderr.writeLine "ghostnim: " & e.msg
+      app.opts.font = old.font
+  if o.size != old.size: app.zoom(o.size)             # also resets any zoom
+  elif fontChanged: app.zoom(app.rd.fontSize)        # new cell size
+  app.needsFull = true
+  stderr.writeLine "ghostnim: reloaded " & configFile(app.cli.configPath)
+
+proc checkConfigChanged(app: App) =
+  ## Poll the config file (at most once a second) and reload when it changes.
+  let now = getTicks()
+  if now - app.configChecked < 1000: return
+  app.configChecked = now
+  if stamp(configFile(app.cli.configPath)) != app.configStamp:
+    app.reloadConfig()
+
 # --- context menu -----------------------------------------------------------
 
 proc runMenuAction(app: App, action: MenuAction) =
@@ -466,6 +568,7 @@ proc runAction(app: App, b: Binding) =
   of acFontSmaller: app.zoom(app.rd.fontSize - 1)
   of acFontReset: app.zoom(app.opts.size)
   of acSendText: app.sendInput(b.text)
+  of acReloadConfig: app.reloadConfig()
 
 proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
   ## Keybindings from the config (or the defaults). True if the key was used.
@@ -745,48 +848,6 @@ proc saveScreenshot(app: App, path: string) =
       row[x * 3 + 2] = char((p shr 16) and 0xFF)
     f.write row
 
-proc parseOptions(): Options =
-  let args = commandLineParams()
-  # The config file first, so the command line can override it.
-  var cfgPath = ""
-  for j, a in args:
-    if a in ["-e", "--exec"]: break
-    if a in ["-c", "--config"] and j + 1 < args.len: cfgPath = args[j + 1]
-  let cfg = loadConfig(cfgPath)
-  result = Options(font: cfg.font, size: cfg.size, cols: cfg.cols, rows: cfg.rows,
-                   scrollback: cfg.scrollback, command: cfg.command,
-                   workingDirectory: cfg.workingDirectory, colors: cfg.colors,
-                   keybinds: cfg.keybinds)
-  var i = 0
-  proc need(i: var int): string =
-    inc i
-    if i >= args.len:
-      quit("ghostnim: missing value for " & args[i - 1], 2)
-    args[i]
-  while i < args.len:
-    let a = args[i]
-    case a
-    of "-h", "--help": echo usage; quit(0)
-    of "-c", "--config": discard need(i)
-    of "-f", "--font": result.font = need(i)
-    of "-s", "--size": result.size = parseInt(need(i))
-    of "--cols": result.cols = parseInt(need(i))
-    of "--rows": result.rows = parseInt(need(i))
-    of "--scrollback": result.scrollback = parseInt(need(i))
-    of "-d", "--working-directory":
-      result.workingDirectory = expandTilde(need(i))
-      if not dirExists(result.workingDirectory):
-        quit("ghostnim: no such directory: " & result.workingDirectory, 2)
-    of "--screenshot": result.screenshot = need(i)
-    of "-e", "--exec":
-      result.command = args[i + 1 .. ^1]
-      break
-    else:
-      quit("ghostnim: unknown option " & a & "\n\n" & usage, 2)
-    inc i
-  if result.command.len == 0: result.command = @[defaultShell()]
-
-
 # Window icon, embedded so it works without any installed files.
 let iconBmp = static(staticRead("../packaging/ghostnim-128.bmp"))
 
@@ -797,7 +858,9 @@ proc setIcon(window: WindowPtr) =
   freeSurface(icon)
 
 proc main() =
-  let opts = parseOptions()
+  let cli = parseCli()
+  let cfgStamp = stamp(configFile(cli.configPath))
+  let opts = merge(loadConfig(cli.configPath), cli)
   # Before SDL starts any threads, since this forks.
   if opts.screenshot.len == 0: startUpdateCheck()
   discard setHint("SDL_IM_MODULE", "")   # let the platform pick its IME
@@ -808,7 +871,8 @@ proc main() =
     quit("ghostnim: TTF_Init failed: " & $getError(), 1)
   defer: ttfQuit()
 
-  let app = App(opts: opts, running: true, needsFull: true)
+  let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
+                needsFull: true)
   let fontPaths = resolveFonts(opts.font)
 
   # Measure the cell size first so the initial window fits cols x rows.
@@ -824,11 +888,7 @@ proc main() =
   discard getRendererOutputSize(r, addr ow, addr oh)
   let scale = if ww > 0: ow.float / ww.float else: 1.0
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
-  template toRgb(c: ConfigRgb): Rgb = Rgb(r: c.r, g: c.g, b: c.b)
-  if opts.colors.selectionForeground.isSome:
-    app.rd.selectionFg = some(toRgb(opts.colors.selectionForeground.get))
-  if opts.colors.selectionBackground.isSome:
-    app.rd.selectionBg = some(toRgb(opts.colors.selectionBackground.get))
+  app.applySelectionColors()
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))
@@ -861,6 +921,7 @@ proc main() =
       blinkOn = not blinkOn
       lastBlink = now
     if not app.running: break
+    if opts.screenshot.len == 0: app.checkConfigChanged()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
     app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
     app.menu.draw(app.rd)

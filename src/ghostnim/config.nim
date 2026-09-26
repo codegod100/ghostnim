@@ -33,7 +33,8 @@
 ##     "ctrl+=" font-bigger       // quote chords with = / ; [ ] ( ) { } \ "
 ##   }
 
-import std/[os, strutils, options]
+import std/[os, strutils, options, times]
+export options
 import kdl, keybinds
 
 type
@@ -135,15 +136,18 @@ proc parseKeybinds(kb: var Keybinds, n: KdlNode, path: string) =
     if action == acNone: kb.del chord
     else: kb[chord] = binding
 
-proc parseConfig*(text: string, path = "config.kdl"): Config =
+proc parseConfig*(text: string, path = "config.kdl", ok: var bool): Config =
   ## Apply the settings in `text` over the defaults. Problems are reported on
   ## stderr and skipped, so a typo never keeps the terminal from starting.
+  ## `ok` is false if the file isn't valid KDL at all (and nothing applied).
   result = defaultConfig()
+  ok = true
   var nodes: seq[KdlNode]
   try:
     nodes = parseKdl(text)
   except KdlError as e:
     warn(path, e.line, e.msg.split(": ", 1)[^1] & "; ignoring the config file")
+    ok = false
     return
 
   for n in nodes:
@@ -190,10 +194,18 @@ proc parseConfig*(text: string, path = "config.kdl"): Config =
     else:
       bad("unknown setting")
 
+proc parseConfig*(text: string, path = "config.kdl"): Config =
+  var ok: bool
+  parseConfig(text, path, ok)
+
+proc configFile*(path = ""): string =
+  ## The file to read: `path` if given, else the default location.
+  if path.len > 0: path else: configPath()
+
 proc loadConfig*(path = ""): Config =
   ## Read the config file at `path`, or the default location. A missing file
   ## at the default location is fine; a missing explicit one is an error.
-  let p = if path.len > 0: path else: configPath()
+  let p = configFile(path)
   if not fileExists(p):
     if path.len > 0: quit("ghostnim: config file not found: " & path, 2)
     return defaultConfig()
@@ -202,3 +214,28 @@ proc loadConfig*(path = ""): Config =
   except IOError as e:
     warn(p, 0, e.msg)
     defaultConfig()
+
+proc reloadConfig*(path = ""): Option[Config] =
+  ## Like loadConfig, for a reload: none() if the file can't be read or isn't
+  ## valid KDL, so a half-saved file doesn't reset everything to defaults.
+  ## A deleted file means the defaults.
+  let p = configFile(path)
+  if not fileExists(p): return some(defaultConfig())
+  try:
+    var ok: bool
+    let cfg = parseConfig(readFile(p), p, ok)
+    if ok: some(cfg) else: none(Config)
+  except IOError as e:
+    warn(p, 0, e.msg)
+    none(Config)
+
+type ConfigStamp* = tuple[exists: bool, mtime: int64, size: int64]
+
+proc stamp*(path: string): ConfigStamp =
+  ## Cheap change detection for the config file.
+  try:
+    let info = getFileInfo(path)
+    let t = info.lastWriteTime
+    (true, t.toUnix * 1000 + t.nanosecond div 1_000_000, info.size.int64)
+  except OSError:
+    (false, 0'i64, 0'i64)

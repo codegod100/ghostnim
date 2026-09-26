@@ -8,6 +8,11 @@
 // line override the file. A setting with a mistake in it is reported on
 // stderr and skipped; the rest of the file still applies.
 //
+// Changes apply as soon as you save the file (or press Ctrl+Shift+, to
+// reload by hand). cols and rows only size the first window, and command and
+// working-directory apply to tabs opened afterwards. If the file doesn't parse,
+// the reload is skipped and the previous settings stay.
+//
 // The syntax is KDL (https://kdl.dev): `name value`, one per line. `//`
 // starts a comment, and `/-` in front of a setting comments out all of it.
 
@@ -103,6 +108,7 @@ scrollback 10000
 //   scroll-to-top, scroll-to-bottom
 //   font-bigger, font-smaller, font-reset
 //   send-text "..."         type text into the program, e.g. "\n" or "\u{1b}b"
+//   reload-config           re-read this file (it also reloads when saved)
 //   none                    unbind the chord
 keybinds {
   ctrl+shift+c copy
@@ -118,6 +124,7 @@ keybinds {
   "ctrl+=" font-bigger
   ctrl+- font-smaller
   ctrl+0 font-reset
+  ctrl+shift+, reload-config
 
   // More examples, off until you remove the `/-`:
   /-alt+1 goto-tab 1

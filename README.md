@@ -42,7 +42,7 @@ the event loop.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours
-  and keybindings (see [Config file](#config-file)).
+  and keybindings, reloaded live when saved (see [Config file](#config-file)).
 
 ## Building
 
@@ -170,7 +170,12 @@ Keybindings add to the defaults listed under Features (use
 `paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
 `goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
 `scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
-`send-text "..."` and `none`.
+`send-text "..."`, `reload-config` and `none`.
+
+The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
+colours, keybindings and scrollback change in the open window; `command` and
+`working-directory` apply to new tabs, and `cols`/`rows` only size the first
+window. A file that doesn't parse is skipped and the previous settings stay.
 
 [`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
 what it does, so it's a good starting point to copy.

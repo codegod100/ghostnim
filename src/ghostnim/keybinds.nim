@@ -30,6 +30,7 @@ type
     acFontSmaller = "font-smaller"
     acFontReset = "font-reset"
     acSendText = "send-text"         ## arg: text written to the program
+    acReloadConfig = "reload-config"
 
   Mod* = enum mCtrl, mShift, mAlt, mSuper
 
@@ -112,3 +113,4 @@ proc defaultKeybinds*(): Keybinds =
   b "ctrl+=", acFontBigger
   b "ctrl+-", acFontSmaller
   b "ctrl+0", acFontReset
+  b "ctrl+shift+,", acReloadConfig

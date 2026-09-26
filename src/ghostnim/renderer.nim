@@ -182,6 +182,11 @@ proc newRenderer*(r: RendererPtr, fontPaths: array[Face, string], fontSize: int,
     "ghostty_render_state_row_cells_new"
   result.colors = initSized(GhosttyRenderStateColors)
 
+proc setFonts*(rd: Renderer, fontPaths: array[Face, string]) =
+  rd.fontPaths = fontPaths
+  rd.clearGlyphCache()
+  rd.loadFonts()
+
 proc setFontSize*(rd: Renderer, size: int) =
   rd.fontSize = max(4, size)
   rd.clearGlyphCache()
