@@ -30,6 +30,12 @@ the event loop.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
   with bracketed paste.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
+- Tabs, each with its own shell and terminal state. The tab bar shows each
+  tab's OSC title. Click a tab to switch to it, click × (or middle-click the
+  tab) to close it, and click + to open a new one. The mouse wheel over the bar
+  also switches tabs. New tabs start in the current tab's directory.
+  Keys: Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Tab /
+  Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= / Ctrl+- / Ctrl+0.
 
@@ -106,10 +112,10 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 
 | File | Purpose |
 | --- | --- |
-| `src/ghostnim.nim` | App: window, event loop, pty wiring, input, selection, clipboard |
+| `src/ghostnim.nim` | App: window, tabs, event loop, pty wiring, input, selection, clipboard |
 | `src/ghostnim/vt.nim` | Nim bindings for the libghostty-vt C API |
 | `src/ghostnim/keys.nim` | `GhosttyKey` enum (generated from `key/event.h`) |
-| `src/ghostnim/renderer.nim` | Walks the libghostty render state and draws cells with SDL |
+| `src/ghostnim/renderer.nim` | Walks the libghostty render state and draws cells and the tab bar with SDL |
 | `src/ghostnim/boxdraw.nim` | Procedural box-drawing and block elements |
 | `src/ghostnim/input.nim` | SDL scancode/modifier → libghostty key mapping |
 | `src/ghostnim/pty.nim` | `forkpty`-based child process |

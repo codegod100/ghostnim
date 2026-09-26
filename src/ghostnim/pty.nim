@@ -26,8 +26,8 @@ proc defaultShell*(): string =
     if pw != nil and pw.pw_shell != nil: result = $pw.pw_shell
   if result.len == 0: result = "/bin/sh"
 
-proc spawn*(argv: seq[string], cols, rows: int, cellW, cellH: int): Pty =
-  ## Fork a child attached to a new pty running `argv`.
+proc spawn*(argv: seq[string], cols, rows: int, cellW, cellH: int, cwd = ""): Pty =
+  ## Fork a child attached to a new pty running `argv`, optionally in `cwd`.
   var ws = Winsize(ws_row: rows.cushort, ws_col: cols.cushort,
                    ws_xpixel: (cols * cellW).cushort, ws_ypixel: (rows * cellH).cushort)
   # Build the exec arguments before forking; the child must not allocate.
@@ -42,6 +42,7 @@ proc spawn*(argv: seq[string], cols, rows: int, cellW, cellH: int): Pty =
     discard setenv("TERM", "xterm-256color", 1)
     discard setenv("COLORTERM", "truecolor", 1)
     discard setenv("TERM_PROGRAM", "ghostnim", 1)
+    if cwd.len > 0: discard chdir(cwd.cstring)
     discard execvp(cargs[0], cargs)
     exitnow(127)
   deallocCStringArray(cargs)
@@ -79,6 +80,11 @@ proc read*(p: Pty, buf: var openArray[uint8]): int =
   if n > 0: return n
   if n < 0 and errno in [EAGAIN, EINTR]: return 0
   -1
+
+proc cwd*(p: Pty): string =
+  ## The child's current working directory (Linux /proc), or "" if unknown.
+  try: expandSymlink("/proc/" & $p.pid & "/cwd")
+  except OSError: ""
 
 proc childExited*(p: Pty): bool =
   var status: cint

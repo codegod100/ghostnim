@@ -4,7 +4,7 @@
 ## state, scrollback, reflow, key/mouse encoding and produces a render
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
-import std/[os, strutils, posix]
+import std/[os, strutils, posix, sequtils]
 import ghostnim/[vt, sdl, pty, renderer, input]
 
 const
@@ -26,6 +26,8 @@ Options:
   -h, --help             show this help
 
 Keys:
+  Ctrl+Shift+T / Ctrl+Shift+W   new tab / close tab
+  Ctrl+Tab / Ctrl+Shift+Tab     next / previous tab (also Ctrl+PageDown/PageUp)
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
@@ -40,19 +42,36 @@ type
     command: seq[string]
     screenshot: string
 
+  PtyWatch = object
+    ## Shared with a tab's watcher thread, so it lives outside the GC heap.
+    fd: cint
+    stop: array[0..1, cint]   ## pipe; writing to stop[1] ends the thread
+    pending: AtomicInt        ## 1 while an event is queued but not yet handled
+    id: int32
+
+  Tab = ref object
+    id: int32
+    term: GhosttyTerminal
+    pty: Pty
+    state: GhosttyRenderState
+    title: string
+    titleChanged: bool
+    watch: ptr PtyWatch
+    thread: ptr Thread
+
   App = ref object
     opts: Options
     window: WindowPtr
     rd: Renderer
-    term: GhosttyTerminal
-    pty: Pty
+    tabs: seq[Tab]
+    active: int
+    nextId: int32
     keyEncoder: GhosttyKeyEncoder
     keyEvent: GhosttyKeyEvent
     mouseEncoder: GhosttyMouseEncoder
     mouseEvent: GhosttyMouseEvent
     running: bool
     needsFull: bool
-    titleChanged: bool
     ## Printable key press waiting for the matching SDL_TEXTINPUT.
     pendingKey: GhosttyKey
     pendingMods: GhosttyMods
@@ -66,35 +85,40 @@ type
     selecting: bool
     selAnchor: (int, int)
     mouseButtons: set[uint8]
+    ## Buttons pressed over the tab bar; their release is ours too.
+    barButtons: set[uint8]
     lastMouseCell: (int, int)
 
-# ---------------------------------------------------------------------------
-# PTY wake-up thread. It only blocks in poll() and pushes an SDL event when
-# the pty has output, so the UI thread can sleep in SDL_WaitEvent. It touches
-# no GC'd memory.
+proc cur(app: App): Tab {.inline.} = app.tabs[app.active]
 
-var
-  ptyEventType: uint32
-  ptyWatchFd: cint
-  ptyWakePending: AtomicInt   # 1 while an event is queued but not yet handled
+# ---------------------------------------------------------------------------
+# PTY wake-up threads, one per tab. Each only blocks in poll() and pushes an
+# SDL event (carrying the tab id) when its pty has output, so the UI thread
+# can sleep in SDL_WaitEvent. They touch no GC'd memory.
+
+var ptyEventType: uint32
 
 proc ptyWatcher(data: pointer): cint {.cdecl.} =
-  var pfd = TPollfd(fd: ptyWatchFd, events: POLLIN)
+  let w = cast[ptr PtyWatch](data)
+  var pfds = [TPollfd(fd: w.fd, events: POLLIN), TPollfd(fd: w.stop[0], events: POLLIN)]
   while true:
-    if atomicGet(addr ptyWakePending) != 0:
-      discard poll(nil, 0, 2)        # the UI hasn't drained yet; back off
-      continue
-    pfd.revents = 0
-    let n = poll(addr pfd, 1, -1)
+    pfds[0].revents = 0
+    pfds[1].revents = 0
+    # The UI hasn't drained yet: back off, only watching for a stop request.
+    let busy = atomicGet(addr w.pending) != 0
+    let n = if busy: poll(addr pfds[1], 1, 2) else: poll(addr pfds[0], 2, -1)
     if n < 0:
       if errno == EINTR: continue
       return 0
-    atomicSet(addr ptyWakePending, 1)
+    if pfds[1].revents != 0: return 0
+    if busy or n == 0: continue
+    atomicSet(addr w.pending, 1)
     var ev: Event
     ev.`type` = ptyEventType
+    ev.user.code = w.id
     discard pushEvent(addr ev)
-    if (pfd.revents and (POLLHUP or POLLERR or POLLNVAL)) != 0 and
-       (pfd.revents and POLLIN) == 0:
+    if (pfds[0].revents and (POLLHUP or POLLERR or POLLNVAL)) != 0 and
+       (pfds[0].revents and POLLIN) == 0:
       return 0
 
 # ---------------------------------------------------------------------------
@@ -103,11 +127,10 @@ proc ptyWatcher(data: pointer): cint {.cdecl.} =
 proc onWritePty(t: GhosttyTerminal, userdata: pointer, data: ptr uint8,
                 len: csize_t) {.cdecl.} =
   ## The terminal wants to reply to the application (DA, DSR, ...).
-  let app = cast[App](userdata)
-  app.pty.writeAll(data, len.int)
+  cast[Tab](userdata).pty.writeAll(data, len.int)
 
 proc onTitleChanged(t: GhosttyTerminal, userdata: pointer) {.cdecl.} =
-  cast[App](userdata).titleChanged = true
+  cast[Tab](userdata).titleChanged = true
 
 # ---------------------------------------------------------------------------
 
@@ -121,60 +144,130 @@ proc applySize(app: App) =
   let (w, h) = app.outputSize()
   app.rd.resize(w, h)
   let (cols, rows) = app.rd.gridSize(w, h)
-  discard ghostty_terminal_resize(app.term, cols.uint16, rows.uint16,
-                                  app.rd.cellW.uint32, app.rd.cellH.uint32)
-  app.pty.resize(cols, rows, app.rd.cellW, app.rd.cellH)
+  for tab in app.tabs:
+    discard ghostty_terminal_resize(tab.term, cols.uint16, rows.uint16,
+                                    app.rd.cellW.uint32, app.rd.cellH.uint32)
+    tab.pty.resize(cols, rows, app.rd.cellW, app.rd.cellH)
   var sz = initSized(GhosttyMouseEncoderSize)
   sz.screen_width = w.uint32
   sz.screen_height = h.uint32
   sz.cell_width = app.rd.cellW.uint32
   sz.cell_height = app.rd.cellH.uint32
-  sz.padding_top = app.rd.pad.uint32
+  sz.padding_top = uint32(app.rd.top + app.rd.pad)
   sz.padding_left = app.rd.pad.uint32
-  sz.padding_bottom = uint32(h - app.rd.pad - rows * app.rd.cellH)
+  sz.padding_bottom = uint32(max(0, h - app.rd.top - app.rd.pad - rows * app.rd.cellH))
   sz.padding_right = uint32(w - app.rd.pad - cols * app.rd.cellW)
   ghostty_mouse_encoder_setopt(app.mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, addr sz)
   app.needsFull = true
 
-proc updateTitle(app: App) =
+proc refreshTitle(tab: Tab) =
   var s: GhosttyString
-  if ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_TITLE, addr s) == GHOSTTY_SUCCESS and
+  tab.title = ""
+  if ghostty_terminal_get(tab.term, GHOSTTY_TERMINAL_DATA_TITLE, addr s) == GHOSTTY_SUCCESS and
      s.len > 0:
-    var title = newString(s.len.int)
-    copyMem(addr title[0], s.`ptr`, s.len.int)
-    setWindowTitle(app.window, title.cstring)
-  else:
-    setWindowTitle(app.window, "ghostnim")
+    tab.title = newString(s.len.int)
+    copyMem(addr tab.title[0], s.`ptr`, s.len.int)
 
-proc drainPty(app: App) =
-  ## Feed everything the child wrote into libghostty-vt.
+proc updateWindowTitle(app: App) =
+  let title = app.cur.title
+  setWindowTitle(app.window, if title.len > 0: title.cstring else: "ghostnim")
+
+# --- tabs -------------------------------------------------------------------
+
+proc newTab(app: App, cwd = ""): Tab =
+  ## A terminal plus a child on a pty, sized to the current window.
+  let (w, h) = app.outputSize()
+  let (cols, rows) = app.rd.gridSize(w, h)
+  let tab = Tab(id: app.nextId, state: newRenderState())
+  inc app.nextId
+  if ghostty_terminal_new(nil, addr tab.term, cols.uint16, rows.uint16) != GHOSTTY_SUCCESS:
+    raise newException(CatchableError, "ghostty_terminal_new failed")
+  discard ghostty_terminal_resize(tab.term, cols.uint16, rows.uint16,
+                                  app.rd.cellW.uint32, app.rd.cellH.uint32)
+  var sb = csize_t(app.opts.scrollback)
+  discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, addr sb)
+  discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_USERDATA, cast[pointer](tab))
+  discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+                               cast[pointer](onWritePty))
+  discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
+                               cast[pointer](onTitleChanged))
+  tab.pty = spawn(app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH, cwd)
+  tab.watch = cast[ptr PtyWatch](allocShared0(sizeof(PtyWatch)))
+  tab.watch.fd = tab.pty.fd
+  tab.watch.id = tab.id
+  if pipe(tab.watch.stop) != 0: raiseOSError(osLastError(), "pipe failed")
+  tab.thread = createThread(ptyWatcher, "pty-watch", tab.watch)
+  tab
+
+proc free(tab: Tab) =
+  discard posix.write(tab.watch.stop[1], cstring("x"), 1)
+  waitThread(tab.thread, nil)
+  discard posix.close(tab.watch.stop[0])
+  discard posix.close(tab.watch.stop[1])
+  deallocShared(tab.watch)
+  tab.pty.close()
+  ghostty_render_state_free(tab.state)
+  ghostty_terminal_free(tab.term)
+
+proc activate(app: App, i: int) =
+  app.active = i
+  app.selecting = false
+  app.needsFull = true
+  app.updateWindowTitle()
+
+proc addTab(app: App) =
+  ## Open a tab next to the current one, in the current tab's directory.
+  let tab = app.newTab(app.cur.pty.cwd)
+  app.tabs.insert(tab, app.active + 1)
+  app.activate(app.active + 1)
+
+proc closeTab(app: App, i: int) =
+  let tab = app.tabs[i]
+  app.tabs.delete(i)
+  tab.free()
+  var status: cint
+  while waitpid(-1, status, WNOHANG) > 0: discard   # reap exited children
+  if app.tabs.len == 0:
+    app.running = false
+    return
+  if app.active > i or app.active >= app.tabs.len: dec app.active
+  app.activate(app.active)
+
+proc cycleTab(app: App, delta: int) =
+  let n = app.tabs.len
+  app.activate(((app.active + delta) mod n + n) mod n)
+
+proc drainPty(app: App, i: int) =
+  ## Feed everything tab `i`'s child wrote into its terminal.
+  let tab = app.tabs[i]
   var buf: array[65536, uint8]
   var total = 0
-  atomicSet(addr ptyWakePending, 0)
+  atomicSet(addr tab.watch.pending, 0)
   while total < 4 * 1024 * 1024:   # yield to the UI after a few MiB
-    let n = app.pty.read(buf)
+    let n = tab.pty.read(buf)
     if n > 0:
-      ghostty_terminal_vt_write(app.term, addr buf[0], csize_t(n))
+      ghostty_terminal_vt_write(tab.term, addr buf[0], csize_t(n))
       total += n
     elif n == 0:
       break
     else:
-      app.running = false
-      break
-  if app.titleChanged:
-    app.titleChanged = false
-    app.updateTitle()
+      app.closeTab(i)             # the child is gone
+      return
+  if tab.titleChanged:
+    tab.titleChanged = false
+    tab.refreshTitle()
+    if i == app.active: app.updateWindowTitle()
 
 proc scrollViewport(app: App, tag: cint, delta = 0) =
   var sv: GhosttyTerminalScrollViewport
   sv.tag = tag
   sv.value.delta = delta
-  ghostty_terminal_scroll_viewport(app.term, sv)
+  ghostty_terminal_scroll_viewport(app.cur.term, sv)
 
 proc sendInput(app: App, s: string) =
   if s.len == 0: return
   app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_BOTTOM)
-  app.pty.writeAll(s)
+  app.cur.pty.writeAll(s)
 
 proc encodeKey(app: App, key: GhosttyKey, action: cint, mods: GhosttyMods,
                unshifted: uint32, text: string) =
@@ -186,7 +279,7 @@ proc encodeKey(app: App, key: GhosttyKey, action: cint, mods: GhosttyMods,
   ghostty_key_event_set_unshifted_codepoint(ev, unshifted)
   ghostty_key_event_set_utf8(ev, text.cstring, csize_t(text.len))
   # Pick up the terminal's current keyboard modes (DECCKM, kitty flags, ...).
-  ghostty_key_encoder_setopt_from_terminal(app.keyEncoder, app.term)
+  ghostty_key_encoder_setopt_from_terminal(app.keyEncoder, app.cur.term)
   var outBuf: array[128, char]
   var outLen: csize_t
   if ghostty_key_encoder_encode(app.keyEncoder, ev, cast[cstring](addr outBuf[0]),
@@ -198,12 +291,12 @@ proc encodeKey(app: App, key: GhosttyKey, action: cint, mods: GhosttyMods,
 
 proc modeEnabled(app: App, mode: GhosttyMode): bool =
   var cfg = GhosttyTerminalModeConfig(mode: mode)
-  ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_MODE, addr cfg) == GHOSTTY_SUCCESS and
+  ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_MODE, addr cfg) == GHOSTTY_SUCCESS and
     cfg.value
 
 proc mouseTracking(app: App): bool =
   var on: bool
-  ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, addr on) ==
+  ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, addr on) ==
     GHOSTTY_SUCCESS and on
 
 # --- clipboard / selection --------------------------------------------------
@@ -228,7 +321,7 @@ proc viewportRef(app: App, col, row: int): (bool, GhosttyGridRef) =
   pt.tag = GHOSTTY_POINT_TAG_VIEWPORT
   pt.value.coordinate = GhosttyPointCoordinate(x: col.uint16, y: row.uint32)
   var r = initSized(GhosttyGridRef)
-  (ghostty_terminal_grid_ref(app.term, pt, addr r) == GHOSTTY_SUCCESS, r)
+  (ghostty_terminal_grid_ref(app.cur.term, pt, addr r) == GHOSTTY_SUCCESS, r)
 
 proc setSelection(app: App, a, b: (int, int)) =
   let (okA, ra) = app.viewportRef(a[0], a[1])
@@ -237,14 +330,14 @@ proc setSelection(app: App, a, b: (int, int)) =
   var sel = initSized(GhosttySelection)
   sel.start = ra
   sel.`end` = rb
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_SELECTION, addr sel)
+  discard ghostty_terminal_set(app.cur.term, GHOSTTY_TERMINAL_OPT_SELECTION, addr sel)
 
 proc clearSelection(app: App) =
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_SELECTION, nil)
+  discard ghostty_terminal_set(app.cur.term, GHOSTTY_TERMINAL_OPT_SELECTION, nil)
 
 proc copySelection(app: App) =
   var sel = initSized(GhosttySelection)
-  if ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_SELECTION, addr sel) != GHOSTTY_SUCCESS:
+  if ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_SELECTION, addr sel) != GHOSTTY_SUCCESS:
     return
   var opts = initSized(GhosttyFormatterTerminalOptions)
   opts.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
@@ -254,7 +347,7 @@ proc copySelection(app: App) =
   opts.extra.screen = initSized(GhosttyFormatterScreenExtra)
   opts.selection = addr sel
   var fmt: GhosttyFormatter
-  if ghostty_formatter_terminal_new(nil, addr fmt, app.term, opts) != GHOSTTY_SUCCESS: return
+  if ghostty_formatter_terminal_new(nil, addr fmt, app.cur.term, opts) != GHOSTTY_SUCCESS: return
   var p: ptr uint8
   var n: csize_t
   if ghostty_formatter_format_alloc(fmt, nil, addr p, addr n) == GHOSTTY_SUCCESS and p != nil:
@@ -275,9 +368,17 @@ proc handleShortcut(app: App, sym: int32, scancode: cint, mods: uint16): bool =
     app.copySelection(); return true
   if ctrl and shift and key == gkV:
     app.paste(); return true
+  if ctrl and shift and key == gkT:
+    app.addTab(); return true
+  if ctrl and shift and key == gkW:
+    app.closeTab(app.active); return true
+  if ctrl and key == gkTab:
+    app.cycleTab(if shift: -1 else: 1); return true
+  if ctrl and not shift and key in {gkPageUp, gkPageDown}:
+    app.cycleTab(if key == gkPageUp: -1 else: 1); return true
   if shift and not ctrl and key in {gkPageUp, gkPageDown}:
     var rows: uint16
-    discard ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+    discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
     let d = max(1, rows.int div 2)
     app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, if key == gkPageUp: -d else: d)
     return true
@@ -341,11 +442,28 @@ proc pixelPos(app: App, x, y: int32): (float, float) =
 proc cellAt(app: App, x, y: int32): (int, int) =
   let (px, py) = app.pixelPos(x, y)
   var cols, rows: uint16
-  discard ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
-  discard ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
   let c = clamp(int((px - app.rd.pad.float) / app.rd.cellW.float), 0, max(0, cols.int - 1))
-  let r = clamp(int((py - app.rd.pad.float) / app.rd.cellH.float), 0, max(0, rows.int - 1))
+  let r = clamp(int((py - float(app.rd.top + app.rd.pad)) / app.rd.cellH.float), 0,
+                max(0, rows.int - 1))
   (c, r)
+
+proc inTabBar(app: App, y: int32): bool =
+  float(y) * app.rd.scale < app.rd.top.float
+
+proc onTabBarClick(app: App, button: uint8, x, y: int32) =
+  let (px, py) = app.pixelPos(x, y)
+  let hit = app.rd.hitTabBar(app.tabs.len, px.int, py.int)
+  case hit.kind
+  of hitTab:
+    if button == BUTTON_LEFT: app.activate(hit.index)
+    elif button == BUTTON_MIDDLE: app.closeTab(hit.index)
+  of hitClose:
+    if button in {BUTTON_LEFT, BUTTON_MIDDLE}: app.closeTab(hit.index)
+  of hitNew:
+    if button == BUTTON_LEFT: app.addTab()
+  of hitNone: discard
 
 proc sendMouse(app: App, action: cint, button: cint, x, y: int32) =
   let ev = app.mouseEvent
@@ -356,7 +474,7 @@ proc sendMouse(app: App, action: cint, button: cint, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   ghostty_mouse_event_set_position(ev, GhosttyMousePosition(x: px.cfloat, y: py.cfloat))
   var anyPressed = app.mouseButtons.len > 0
-  ghostty_mouse_encoder_setopt_from_terminal(app.mouseEncoder, app.term)
+  ghostty_mouse_encoder_setopt_from_terminal(app.mouseEncoder, app.cur.term)
   ghostty_mouse_encoder_setopt(app.mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
                                addr anyPressed)
   var outBuf: array[64, char]
@@ -366,7 +484,7 @@ proc sendMouse(app: App, action: cint, button: cint, x, y: int32) =
      outLen > 0:
     var s = newString(outLen.int)
     copyMem(addr s[0], addr outBuf[0], outLen.int)
-    app.pty.writeAll(s)
+    app.cur.pty.writeAll(s)
 
 proc sdlButton(b: uint8): cint =
   case b
@@ -380,6 +498,13 @@ proc reportMouse(app: App): bool =
   app.mouseTracking() and (getModState() and KMOD_SHIFT) == 0
 
 proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
+  if down and app.inTabBar(e.y) and app.mouseButtons.len == 0:
+    app.barButtons.incl e.button
+    app.onTabBarClick(e.button, e.x, e.y)
+    return
+  if not down and e.button in app.barButtons:
+    app.barButtons.excl e.button
+    return
   if down: app.mouseButtons.incl e.button else: app.mouseButtons.excl e.button
   if app.reportMouse():
     let action = if down: GHOSTTY_MOUSE_ACTION_PRESS else: GHOSTTY_MOUSE_ACTION_RELEASE
@@ -397,6 +522,7 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
   if app.reportMouse():
+    if app.mouseButtons.len == 0 and app.inTabBar(e.y): return
     let cell = app.cellAt(e.x, e.y)
     if cell == app.lastMouseCell: return
     app.lastMouseCell = cell
@@ -413,9 +539,11 @@ proc onMouseWheel(app: App, e: MouseWheelEvent) =
   var dy = e.y
   if e.direction == MOUSEWHEEL_FLIPPED: dy = -dy
   if dy == 0: return
-  if app.reportMouse():
-    var x, y: cint
-    discard getMouseState(addr x, addr y)
+  var x, y: cint
+  discard getMouseState(addr x, addr y)
+  if app.inTabBar(y):
+    app.cycleTab(if dy > 0: -1 else: 1)
+  elif app.reportMouse():
     let button = if dy > 0: GHOSTTY_MOUSE_BUTTON_FOUR else: GHOSTTY_MOUSE_BUTTON_FIVE
     for _ in 1 .. abs(dy):
       app.sendMouse(GHOSTTY_MOUSE_ACTION_PRESS, button, x, y)
@@ -425,7 +553,10 @@ proc onMouseWheel(app: App, e: MouseWheelEvent) =
 proc handleEvent(app: App, e: var Event) =
   let t = e.`type`
   if t == ptyEventType:
-    app.drainPty()
+    for i, tab in app.tabs:
+      if tab.id == e.user.code:
+        app.drainPty(i)
+        break
   elif t == EV_QUIT:
     app.running = false
   elif t == EV_KEYDOWN:
@@ -532,31 +663,20 @@ proc main() =
   let scale = if ww > 0: ow.float / ww.float else: 1.0
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
-  let winH = (opts.rows * app.rd.cellH + 2 * app.rd.pad).float / scale
+  let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))
 
-  # libghostty-vt terminal
-  if ghostty_terminal_new(nil, addr app.term, opts.cols.uint16, opts.rows.uint16) !=
-     GHOSTTY_SUCCESS:
-    quit("ghostnim: ghostty_terminal_new failed", 1)
-  var sb = csize_t(opts.scrollback)
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, addr sb)
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_USERDATA, cast[pointer](app))
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
-                               cast[pointer](onWritePty))
-  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
-                               cast[pointer](onTitleChanged))
   discard ghostty_key_encoder_new(nil, addr app.keyEncoder)
   discard ghostty_key_event_new(nil, addr app.keyEvent)
   discard ghostty_mouse_encoder_new(nil, addr app.mouseEncoder)
   discard ghostty_mouse_event_new(nil, addr app.mouseEvent)
 
-  # Child process on a pty, plus the watcher thread that wakes the UI.
-  app.pty = spawn(opts.command, opts.cols, opts.rows, app.rd.cellW, app.rd.cellH)
-  app.applySize()
+  # The first tab: a terminal and its child on a pty, watched by a thread
+  # that wakes the UI.
   ptyEventType = registerEvents(1)
-  ptyWatchFd = app.pty.fd
-  detachThread(createThread(ptyWatcher, "pty-watch", nil))
+  app.tabs.add app.newTab()
+  app.applySize()
+  app.updateWindowTitle()
   startTextInput()
 
   let startTicks = getTicks()
@@ -564,7 +684,7 @@ proc main() =
   var blinkOn = true
   var ev: Event
   while app.running:
-    let timeout = if app.rd.cursorBlinking(): cint(blinkIntervalMs) else: cint(1000)
+    let timeout = if app.rd.cursorBlinking(app.cur.state): cint(blinkIntervalMs) else: cint(1000)
     if waitEventTimeout(addr ev, timeout) != 0:
       app.handleEvent(ev)
       while app.running and pollEvent(addr ev) != 0:
@@ -574,7 +694,8 @@ proc main() =
       blinkOn = not blinkOn
       lastBlink = now
     if not app.running: break
-    app.rd.draw(app.term, app.needsFull, blinkOn)
+    app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
+    app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
     app.needsFull = false
     if opts.screenshot.len > 0 and now - startTicks > 1500:
       # Headless test hook: capture the backbuffer before presenting it.
@@ -582,13 +703,12 @@ proc main() =
       app.running = false
     renderPresent(app.rd.r)
 
-  app.pty.close()
+  for tab in app.tabs: tab.free()
   ghostty_mouse_event_free(app.mouseEvent)
   ghostty_mouse_encoder_free(app.mouseEncoder)
   ghostty_key_event_free(app.keyEvent)
   ghostty_key_encoder_free(app.keyEncoder)
   app.rd.destroy()
-  ghostty_terminal_free(app.term)
   destroyRenderer(r)
   destroyWindow(app.window)
 
