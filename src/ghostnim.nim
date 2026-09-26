@@ -658,6 +658,32 @@ proc stateDir(): string =
 proc folderBarHiddenFlag(): string = stateDir() / "folder-bar-hidden"
   ## Exists while the recent-folders strip is turned off.
 
+proc recentDirsFile(): string = stateDir() / "recent-folders"
+  ## One folder per line, most used first: "VISITS LAST-VISIT PATH".
+
+proc loadRecentDirs(app: App) =
+  try:
+    for line in readFile(recentDirsFile()).splitLines:
+      let parts = line.split(' ', maxsplit = 2)
+      if parts.len < 3 or not parts[2].isAbsolute: continue
+      let d = RecentDir(path: parts[2], visits: parseInt(parts[0]),
+                        lastVisit: parseInt(parts[1]))
+      app.dirs.add d
+      app.dirVisits = max(app.dirVisits, d.lastVisit)
+  except IOError, OSError, ValueError:
+    discard
+
+proc saveRecentDirs(app: App) =
+  var text = ""
+  for d in app.dirs:
+    text.add $d.visits & " " & $d.lastVisit & " " & d.path & "\n"
+  try:
+    createDir(stateDir())
+    writeFile(recentDirsFile(), text)
+  except OSError, IOError:
+    stderr.writeLine "ghostnim: can't save the recent folders: " &
+                     getCurrentExceptionMsg().splitLines[0]
+
 proc findDir(app: App, dir: string): int =
   for i, d in app.dirs:
     if d.path == dir: return i
@@ -693,6 +719,7 @@ proc trackDirs(app: App) =
     byAge.sort(proc (a, b: RecentDir): int = cmp(b.lastVisit, a.lastVisit))
     let cutoff = byAge[keptRecentDirs - 1].lastVisit
     app.dirs.keepItIf(it.lastVisit >= cutoff)
+  app.saveRecentDirs()
 
 proc recentDirs(app: App): seq[string] =
   ## The most used folders, not counting the one the current tab is in.
@@ -713,7 +740,9 @@ proc goToDir(app: App, dir: string, newTab = false) =
   ## it (or `newTab`), open a new tab there.
   if not dirExists(dir):
     let i = app.findDir(dir)
-    if i >= 0: app.dirs.delete(i)
+    if i >= 0:
+      app.dirs.delete(i)
+      app.saveRecentDirs()
     return
   if newTab or not app.cur.pty.atPrompt:
     app.addTab(dir = dir)
@@ -1528,6 +1557,7 @@ proc main() =
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
   app.applySelectionColors()
   app.rd.setFolderBar(not fileExists(folderBarHiddenFlag()))
+  app.loadRecentDirs()
   let paneW = if app.paneOn: max(12 * app.rd.cellW, int(app.paneW.float * scale + 0.5)) else: 0
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad + paneW).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale

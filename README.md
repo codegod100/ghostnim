@@ -67,7 +67,8 @@ the event loop.
   Click one to `cd` there, or
   middle-click it to open it in a new tab; if a program is running in the
   tab, a click opens a new tab too. Turn the strip on or off from the
-  right-click menu; the choice is remembered in
+  right-click menu. The folders and their visit counts, and whether the
+  strip is shown, are remembered in
   `$XDG_STATE_HOME/ghostnim` (`~/.local/state/ghostnim`).
 - File manager: Ctrl+Shift+E (or Show File Manager in the right-click menu)
   splits a folder listing off the left of the window. It shows the current
