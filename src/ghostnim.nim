@@ -5,7 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils]
-import ghostnim/[vt, sdl, pty, renderer, input, menu, update]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config]
 
 const
   version = "0.1.0"
@@ -16,6 +16,7 @@ ghostnim """ & version & """ - a Nim terminal powered by libghostty-vt
 Usage: ghostnim [options] [-e command [args...]]
 
 Options:
+  -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
   -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
@@ -34,6 +35,10 @@ Keys:
 
 Right-click opens a menu with copy, paste, select all and zoom (hold Shift
 to open it when the application has mouse reporting on).
+
+Every option except --config, --screenshot and --help can also be set in the
+config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
+`scrollback 50000`, `command "fish" "--login"`. The command line wins.
 """
 
 type
@@ -707,8 +712,15 @@ proc saveScreenshot(app: App, path: string) =
     f.write row
 
 proc parseOptions(): Options =
-  result = Options(size: 14, cols: 100, rows: 30, scrollback: 10_000)
   let args = commandLineParams()
+  # The config file first, so the command line can override it.
+  var cfgPath = ""
+  for j, a in args:
+    if a in ["-e", "--exec"]: break
+    if a in ["-c", "--config"] and j + 1 < args.len: cfgPath = args[j + 1]
+  let cfg = loadConfig(cfgPath)
+  result = Options(font: cfg.font, size: cfg.size, cols: cfg.cols, rows: cfg.rows,
+                   scrollback: cfg.scrollback, command: cfg.command)
   var i = 0
   proc need(i: var int): string =
     inc i
@@ -719,6 +731,7 @@ proc parseOptions(): Options =
     let a = args[i]
     case a
     of "-h", "--help": echo usage; quit(0)
+    of "-c", "--config": discard need(i)
     of "-f", "--font": result.font = need(i)
     of "-s", "--size": result.size = parseInt(need(i))
     of "--cols": result.cols = parseInt(need(i))

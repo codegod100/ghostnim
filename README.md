@@ -117,6 +117,7 @@ update it too. Locally built AppImages don't self-update unless built with
 ```
 ghostnim [options] [-e command [args...]]
 
+  -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
   -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
@@ -127,6 +128,26 @@ ghostnim [options] [-e command [args...]]
 ```
 
 ghostnim sets `TERM=xterm-256color` for the child process.
+
+### Config file
+
+Settings can also go in a [KDL](https://kdl.dev) file at
+`$XDG_CONFIG_HOME/ghostnim/config.kdl` (usually
+`~/.config/ghostnim/config.kdl`), or wherever `--config` points. Each setting
+is a node named after its command-line option, and the command line wins:
+
+```kdl
+font "JetBrains Mono"
+font-size 13
+cols 120
+rows 36
+scrollback 50000
+command "fish" "--login"
+```
+
+[`docs/config.kdl`](docs/config.kdl) lists every setting with its default.
+Mistakes such as an unknown setting or a value out of range are reported on
+stderr and skipped, so a broken config never stops the terminal from starting.
 
 ## Layout
 
@@ -140,6 +161,8 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 | `src/ghostnim/input.nim` | SDL scancode/modifier → libghostty key mapping |
 | `src/ghostnim/pty.nim` | `forkpty`-based child process |
 | `src/ghostnim/sdl.nim` | Minimal SDL2/SDL_ttf bindings |
+| `src/ghostnim/config.nim` | Loads the KDL config file |
+| `src/ghostnim/kdl.nim` | Small dependency-free KDL parser |
 | `src/ghostnim/update.nim` | Background self-update for CI-built AppImages |
 
 ## Notes
@@ -147,4 +170,4 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 - libghostty-vt's API is still pre-1.0. The bindings target the commit pinned
   in `scripts/build-libghostty-vt.sh`.
 - Not implemented yet: Kitty graphics, ligatures/shaping, colour emoji,
-  hyperlinks, and a config file.
+  hyperlinks, and colour/keybinding settings in the config file.

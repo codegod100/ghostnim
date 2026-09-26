@@ -1,0 +1,20 @@
+// ghostnim config — copy to ~/.config/ghostnim/config.kdl
+// (or $XDG_CONFIG_HOME/ghostnim/config.kdl). Every setting is optional;
+// the values below are the defaults. Options on the command line win.
+// Syntax: https://kdl.dev — `/-` comments out the node after it.
+
+// Font family (resolved through fontconfig) or a path to a font file.
+/-font "JetBrains Mono"
+
+// Font size in points. Ctrl+0 resets zoom to this.
+font-size 14
+
+// Initial window size, in cells.
+cols 100
+rows 30
+
+// Lines of scrollback per tab.
+scrollback 10000
+
+// Program to run in each tab instead of $SHELL, with its arguments.
+/-command "fish" "--login"
