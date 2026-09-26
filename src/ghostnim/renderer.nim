@@ -132,6 +132,17 @@ proc resolveFonts*(primary: string): array[Face, string] =
   # name when it is installed (or bundled), else we could get a proportional
   # font.
   var family = primary
+  # A family that isn't installed would quietly come back as whatever
+  # fontconfig substitutes (often without ligatures, or not even monospace),
+  # so say so and use the default instead. Generic names like "monospace" are
+  # aliases that fc-list doesn't know; let fc-match resolve those.
+  if family.len > 0 and not fileExists(primary) and
+     family.split(':')[0].strip.toLowerAscii notin
+       ["monospace", "mono", "sans-serif", "sans", "serif"] and
+     fcList(family).len == 0:
+    stderr.writeLine "ghostnim: font \"" & family &
+                     "\" is not installed; using the default font"
+    family = ""
   if family.len == 0:
     family = "monospace"
     for f in DefaultFonts:
