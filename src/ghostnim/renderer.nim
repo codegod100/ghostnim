@@ -51,7 +51,10 @@ type
     cellW*, cellH*: int
     ascent: int
     pad*: int                ## padding around the grid, in output pixels
-    top*: int                ## height of the tab bar above the grid
+    top*: int                ## height of the bars above the grid
+    tabH*: int               ## height of the tab bar
+    folderH*: int            ## height of the recent-folders strip under it
+    folderBar*: bool         ## whether the recent-folders strip is shown
     glyphs: Table[(string, int), Glyph]
     fallbackByFile: Table[string, FontPtr]
     fallbackForCp: Table[uint32, FontPtr]
@@ -185,7 +188,9 @@ proc loadFonts(rd: Renderer) =
   rd.cellH = max(1, fontLineSkip(rd.fonts[faceRegular]).int)
   rd.ascent = fontAscent(rd.fonts[faceRegular]).int
   rd.pad = int(4.0 * rd.scale)
-  rd.top = rd.cellH + int(10.0 * rd.scale)
+  rd.tabH = rd.cellH + int(10.0 * rd.scale)
+  rd.folderH = rd.cellH + int(10.0 * rd.scale)
+  rd.top = rd.tabH + (if rd.folderBar: rd.folderH else: 0)
 
 proc clearGlyphCache(rd: Renderer) =
   for g in rd.glyphs.values: destroyTexture(g.tex)
@@ -217,6 +222,11 @@ proc setFontSize*(rd: Renderer, size: int) =
   rd.fontSize = max(4, size)
   rd.clearGlyphCache()
   rd.loadFonts()
+
+proc setFolderBar*(rd: Renderer, on: bool) =
+  ## Show or hide the recent-folders strip under the tab bar.
+  rd.folderBar = on
+  rd.top = rd.tabH + (if on: rd.folderH else: 0)
 
 proc destroy*(rd: Renderer) =
   rd.clearGlyphCache()
@@ -622,16 +632,16 @@ proc mix(a, b: Rgb, t: float): Rgb =
 
 proc tabWidth(rd: Renderer, n: int): int =
   ## Tabs share the bar right of the "+" button, up to a comfortable maximum.
-  max(1, min(32 * rd.cellW, (rd.gridW - rd.top) div max(1, n)))
+  max(1, min(32 * rd.cellW, (rd.gridW - rd.tabH) div max(1, n)))
 
 proc closeWidth(rd: Renderer, tabW: int): int = min(3 * rd.cellW, tabW div 3)
 
 proc hitTabBar*(rd: Renderer, n, x, y: int): TabHit =
   ## What lies under output pixel (x, y) in a bar showing `n` tabs.
-  if y < 0 or y >= rd.top or x < 0: return
-  if x < rd.top: return TabHit(kind: hitNew)
+  if y < 0 or y >= rd.tabH or x < 0: return  # (the folder strip is separate)
+  if x < rd.tabH: return TabHit(kind: hitNew)
   let tabW = rd.tabWidth(n)
-  let tx = x - rd.top
+  let tx = x - rd.tabH
   let i = tx div tabW
   if i < n:
     let kind = if tx >= (i + 1) * tabW - rd.closeWidth(tabW): hitClose else: hitTab
@@ -723,33 +733,33 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   let tabW = rd.tabWidth(n)
   let closeW = rd.closeWidth(tabW)
   let line = max(1, int(rd.scale))
-  let inset = max(2, rd.top div 6)            # gap above a tab and between tabs
-  let radius = max(3, rd.top div 3)
-  let textY = inset + (rd.top - inset - rd.cellH) div 2
+  let inset = max(2, rd.tabH div 6)            # gap above a tab and between tabs
+  let radius = max(3, rd.tabH div 3)
+  let textY = inset + (rd.tabH - inset - rd.cellH) div 2
   let iconSize = max(6.0, rd.cellH.float * 0.36)
   rd.setColor(barBg)
-  rd.fillRect(0, 0, rd.gridW, rd.top)
+  rd.fillRect(0, 0, rd.gridW, rd.tabH)
   # The border under the bar, broken where the active tab joins the terminal.
   rd.setColor(mix(bg, fg, 0.2))
-  let activeX = rd.top + active * tabW
-  rd.fillRect(0, rd.top - line, activeX, line)
-  rd.fillRect(activeX + tabW, rd.top - line, rd.gridW - activeX - tabW, line)
+  let activeX = rd.tabH + active * tabW
+  rd.fillRect(0, rd.tabH - line, activeX, line)
+  rd.fillRect(activeX + tabW, rd.tabH - line, rd.gridW - activeX - tabW, line)
   if n > 0 and active != 0:
     # Divider between the "+" button and the first tab.
     rd.setColor(mix(bg, fg, 0.25))
-    rd.fillRect(rd.top - line, inset + (rd.top - inset) div 4, line, (rd.top - inset) div 2)
+    rd.fillRect(rd.tabH - line, inset + (rd.tabH - inset) div 4, line, (rd.tabH - inset) div 2)
   for i, title in titles:
-    let x = rd.top + i * tabW
+    let x = rd.tabH + i * tabW
     let isActive = i == active
     if isActive:
       # Rounded tab, outlined in the border colour, flowing into the terminal.
-      rd.fillTopRounded(x + inset div 2, inset, tabW - inset, rd.top - inset,
+      rd.fillTopRounded(x + inset div 2, inset, tabW - inset, rd.tabH - inset,
                         radius, mix(bg, fg, 0.2))
       rd.fillTopRounded(x + inset div 2 + line, inset + line, tabW - inset - 2 * line,
-                        rd.top - inset - line, radius - line, bg)
+                        rd.tabH - inset - line, radius - line, bg)
     elif i + 1 != active:
       rd.setColor(mix(bg, fg, 0.25))
-      rd.fillRect(x + tabW - line, inset + (rd.top - inset) div 4, line, (rd.top - inset) div 2)
+      rd.fillRect(x + tabW - line, inset + (rd.tabH - inset) div 4, line, (rd.tabH - inset) div 2)
     let textFg = if isActive: fg else: mix(bg, fg, 0.6)
     # Title, cut to the space left of the close button.
     let maxChars = (tabW - closeW - rd.cellW - inset) div rd.cellW
@@ -760,5 +770,66 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
                     if isActive: faceBold else: faceRegular)
     rd.drawCloseIcon(float(x + tabW - inset div 2) - closeW.float / 2,
                      textY.float + rd.cellH.float / 2, iconSize, textFg)
-  rd.drawPlusIcon(rd.top.float / 2,
+  rd.drawPlusIcon(rd.tabH.float / 2,
                   textY.float + rd.cellH.float / 2, iconSize * 1.2, mix(bg, fg, 0.6))
+
+# --- recent-folders strip ----------------------------------------------------
+
+proc fillRounded(rd: Renderer, x, y, w, h, r: int, c: Rgb) =
+  ## A rectangle with all four corners antialiased quarter circles.
+  let r = min(r, min(w div 2, h div 2))
+  rd.setColor(c)
+  rd.fillRect(x + r, y, w - 2 * r, h)
+  rd.fillRect(x, y + r, r, h - 2 * r)
+  rd.fillRect(x + w - r, y + r, r, h - 2 * r)
+  proc corner(x0, y0: int, cx, cy: float) =
+    let rf = r.float
+    rd.blendSpans(x0, y0, x0 + r, y0 + r, c, proc (px, py: float): float =
+      rf + 0.5 - hypot(px - cx, py - cy))
+  let (l, t) = (float(x + r), float(y + r))
+  let (rr, b) = (float(x + w - r), float(y + h - r))
+  corner(x, y, l, t)
+  corner(x + w - r, y, rr, t)
+  corner(x, y + h - r, l, b)
+  corner(x + w - r, y + h - r, rr, b)
+
+proc folderChips(rd: Renderer, labels: openArray[string]): seq[tuple[x, w: int]] =
+  ## Where each folder chip goes, left to right; only the ones that fit.
+  let padX = rd.cellW
+  let gap = max(2, rd.cellW div 2)
+  var x = rd.pad + rd.cellW div 2
+  for label in labels:
+    let w = label.runeLen * rd.cellW + 2 * padX
+    if x + w > rd.gridW - rd.pad: break
+    result.add (x, w)
+    x += w + gap
+
+proc chipBox(rd: Renderer): tuple[y, h: int] =
+  let inset = max(2, int(4 * rd.scale))
+  (rd.tabH + inset, rd.folderH - 2 * inset)
+
+proc hitFolderBar*(rd: Renderer, labels: openArray[string], x, y: int): int =
+  ## The index of the folder chip under output pixel (x, y), or -1.
+  if not rd.folderBar: return -1
+  let (cy, ch) = rd.chipBox()
+  if y < cy or y >= cy + ch: return -1
+  for i, c in rd.folderChips(labels):
+    if x >= c.x and x < c.x + c.w: return i
+  -1
+
+proc drawFolderBar*(rd: Renderer, labels: openArray[string], hovered: int) =
+  ## Draw the recent folders as chips under the tab bar, on the terminal's
+  ## background so the active tab flows through them into the terminal.
+  if not rd.folderBar: return
+  let bg = rgb(rd.colors.background)
+  let fg = rgb(rd.colors.foreground)
+  rd.setColor(bg)
+  rd.fillRect(0, rd.tabH, rd.gridW, rd.folderH)
+  let (cy, ch) = rd.chipBox()
+  let textY = cy + (ch - rd.cellH) div 2
+  for i, c in rd.folderChips(labels):
+    let isHovered = i == hovered
+    rd.fillRounded(c.x, cy, c.w, ch, ch div 2,
+                   mix(bg, fg, if isHovered: 0.16 else: 0.06))
+    rd.drawCellText(labels[i], c.x + rd.cellW, textY,
+                    if isHovered: fg else: mix(bg, fg, 0.6))
