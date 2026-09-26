@@ -81,3 +81,48 @@ scrollback 10000
   palette 14 "#7dcfff"
   palette 15 "#c0caf5"
 }
+
+// --- Keybindings -----------------------------------------------------------
+
+// One shortcut per line: `CHORD ACTION`, plus an argument for the actions
+// that take one. These add to or change the defaults; bind a chord to `none`
+// to remove it, or write `keybinds clear-defaults=#true { ... }` to start
+// from nothing. The lines below are the defaults.
+//
+// Chords: any of ctrl, shift, alt and super, then one key, joined with `+`.
+// Keys are physical keys named as on a US layout: a-z, 0-9, f1-f25, enter,
+// tab, space, escape, backspace, delete, insert, home, end, page-up,
+// page-down, up, down, left, right, and punctuation (= - , . / ; ' ` [ ] \).
+// Quote a chord that contains = / ; [ ] \ or a quote, like "ctrl+=".
+//
+// Actions:
+//   copy, paste, select-all
+//   new-tab, close-tab, next-tab, previous-tab
+//   goto-tab N              switch to tab N (1 is the leftmost)
+//   scroll-page-up, scroll-page-down   scroll by half a screen
+//   scroll-to-top, scroll-to-bottom
+//   font-bigger, font-smaller, font-reset
+//   send-text "..."         type text into the program, e.g. "\n" or "\u{1b}b"
+//   none                    unbind the chord
+keybinds {
+  ctrl+shift+c copy
+  ctrl+shift+v paste
+  ctrl+shift+t new-tab
+  ctrl+shift+w close-tab
+  ctrl+tab next-tab
+  ctrl+shift+tab previous-tab
+  ctrl+page-down next-tab
+  ctrl+page-up previous-tab
+  shift+page-up scroll-page-up
+  shift+page-down scroll-page-down
+  "ctrl+=" font-bigger
+  ctrl+- font-smaller
+  ctrl+0 font-reset
+
+  // More examples, off until you remove the `/-`:
+  /-alt+1 goto-tab 1
+  /-alt+2 goto-tab 2
+  /-shift+home scroll-to-top
+  /-shift+end scroll-to-bottom
+  /-ctrl+shift+a select-all
+}

@@ -5,7 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils, options]
-import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds]
 
 const
   version = "0.1.0"
@@ -27,7 +27,7 @@ Options:
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
   -h, --help             show this help
 
-Keys:
+Keys (defaults; change them in the config file's keybinds block):
   Ctrl+Shift+T / Ctrl+Shift+W   new tab / close tab
   Ctrl+Tab / Ctrl+Shift+Tab     next / previous tab (also Ctrl+PageDown/PageUp)
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
@@ -40,7 +40,7 @@ to open it when the application has mouse reporting on).
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
 `scrollback 50000`, `command "fish" "--login"`, `working-directory "~/code"`,
-plus a `colors { ... }` block. The command line wins.
+plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
@@ -52,6 +52,7 @@ type
     command: seq[string]
     workingDirectory: string
     colors: Colors
+    keybinds: Keybinds
     screenshot: string
 
   PtyWatch = object
@@ -441,36 +442,42 @@ proc menuKey(app: App, e: KeyboardEvent) =
 
 # --- events -----------------------------------------------------------------
 
-proc handleShortcut(app: App, sym: int32, scancode: cint, mods: uint16): bool =
-  ## Terminal-level shortcuts. Returns true if the key was consumed.
-  let ctrl = (mods and KMOD_CTRL) != 0
-  let shift = (mods and KMOD_SHIFT) != 0
-  let key = toGhosttyKey(scancode)
-  if ctrl and shift and key == gkC:
-    app.copySelection(); return true
-  if ctrl and shift and key == gkV:
-    app.paste(); return true
-  if ctrl and shift and key == gkT:
-    app.addTab(); return true
-  if ctrl and shift and key == gkW:
-    app.closeTab(app.active); return true
-  if ctrl and key == gkTab:
-    app.cycleTab(if shift: -1 else: 1); return true
-  if ctrl and not shift and key in {gkPageUp, gkPageDown}:
-    app.cycleTab(if key == gkPageUp: -1 else: 1); return true
-  if shift and not ctrl and key in {gkPageUp, gkPageDown}:
+proc runAction(app: App, b: Binding) =
+  case b.action
+  of acNone: discard
+  of acCopy: app.copySelection()
+  of acPaste: app.paste()
+  of acSelectAll: app.selectAll()
+  of acNewTab: app.addTab()
+  of acCloseTab: app.closeTab(app.active)
+  of acNextTab: app.cycleTab(1)
+  of acPreviousTab: app.cycleTab(-1)
+  of acGotoTab:
+    if b.num <= app.tabs.len: app.activate(b.num - 1)
+  of acScrollPageUp, acScrollPageDown:
     var rows: uint16
     discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
     let d = max(1, rows.int div 2)
-    app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, if key == gkPageUp: -d else: d)
-    return true
-  if ctrl and not shift and key in {gkEqual, gkMinus, gkDigit0}:
-    app.zoom(case key
-             of gkEqual: app.rd.fontSize + 1
-             of gkMinus: app.rd.fontSize - 1
-             else: app.opts.size)
-    return true
-  false
+    app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                       if b.action == acScrollPageUp: -d else: d)
+  of acScrollToTop: app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_TOP)
+  of acScrollToBottom: app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_BOTTOM)
+  of acFontBigger: app.zoom(app.rd.fontSize + 1)
+  of acFontSmaller: app.zoom(app.rd.fontSize - 1)
+  of acFontReset: app.zoom(app.opts.size)
+  of acSendText: app.sendInput(b.text)
+
+proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
+  ## Keybindings from the config (or the defaults). True if the key was used.
+  var chord = Chord(key: toGhosttyKey(scancode))
+  if (mods and KMOD_CTRL) != 0: chord.mods.incl mCtrl
+  if (mods and KMOD_SHIFT) != 0: chord.mods.incl mShift
+  if (mods and KMOD_ALT) != 0: chord.mods.incl mAlt
+  if (mods and KMOD_GUI) != 0: chord.mods.incl mSuper
+  let b = app.opts.keybinds.getOrDefault(chord)
+  if b.action == acNone: return false
+  app.runAction(b)
+  true
 
 proc onKeyDown(app: App, e: KeyboardEvent) =
   let sym = e.keysym.sym
@@ -478,7 +485,11 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
   if app.menu.open:
     app.menuKey(e)
     return
-  if app.handleShortcut(sym, e.keysym.scancode, smods): return
+  if app.handleShortcut(e.keysym.scancode, smods):
+    # A binding like shift+a or alt+1 would also type its character.
+    app.hasPendingKey = false
+    app.suppressText = producesText(sym, smods)
+    return
   app.suppressText = false
   let key = toGhosttyKey(e.keysym.scancode)
   let mods = toGhosttyMods(smods)
@@ -744,7 +755,8 @@ proc parseOptions(): Options =
   let cfg = loadConfig(cfgPath)
   result = Options(font: cfg.font, size: cfg.size, cols: cfg.cols, rows: cfg.rows,
                    scrollback: cfg.scrollback, command: cfg.command,
-                   workingDirectory: cfg.workingDirectory, colors: cfg.colors)
+                   workingDirectory: cfg.workingDirectory, colors: cfg.colors,
+                   keybinds: cfg.keybinds)
   var i = 0
   proc need(i: var int): string =
     inc i

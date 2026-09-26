@@ -41,6 +41,8 @@ the event loop.
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= / Ctrl+- / Ctrl+0.
+- A KDL config file for fonts, window size, shell, start directory, colours
+  and keybindings (see [Config file](#config-file)).
 
 ## Building
 
@@ -154,7 +156,21 @@ colors {
   selection-background "#33467c"
   palette 1 "#f7768e"   // one line per 256-colour palette entry to change
 }
+
+keybinds {
+  alt+1 goto-tab 1
+  ctrl+shift+enter send-text "\n"
+  ctrl+shift+w none     // unbind a default
+  "ctrl+=" font-bigger  // quote chords containing = / ; [ ] \
+}
 ```
+
+Keybindings add to the defaults listed under Features (use
+`keybinds clear-defaults=#true { ... }` to start from none). Actions: `copy`,
+`paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
+`goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
+`scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
+`send-text "..."` and `none`.
 
 [`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
 what it does, so it's a good starting point to copy.
@@ -174,6 +190,7 @@ stderr and skipped, so a broken config never stops the terminal from starting.
 | `src/ghostnim/pty.nim` | `forkpty`-based child process |
 | `src/ghostnim/sdl.nim` | Minimal SDL2/SDL_ttf bindings |
 | `src/ghostnim/config.nim` | Loads the KDL config file |
+| `src/ghostnim/keybinds.nim` | Key chords, actions and the default keybindings |
 | `src/ghostnim/kdl.nim` | Small dependency-free KDL parser |
 | `src/ghostnim/update.nim` | Background self-update for CI-built AppImages |
 
@@ -182,4 +199,4 @@ stderr and skipped, so a broken config never stops the terminal from starting.
 - libghostty-vt's API is still pre-1.0. The bindings target the commit pinned
   in `scripts/build-libghostty-vt.sh`.
 - Not implemented yet: Kitty graphics, ligatures/shaping, colour emoji,
-  hyperlinks, and keybinding settings in the config file.
+  and hyperlinks.

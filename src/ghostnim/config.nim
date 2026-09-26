@@ -21,9 +21,20 @@
 ##     palette 0 "#15161e"      // one node per 256-colour palette entry
 ##     palette 1 "#f7768e"
 ##   }
+##
+## Shortcuts go in a `keybinds` block, one `CHORD ACTION [ARG]` per line; see
+## keybinds.nim for the names. They add to (or replace) the defaults, unless
+## the block says `clear-defaults=#true`:
+##
+##   keybinds {
+##     alt+1 goto-tab 1
+##     ctrl+shift+enter send-text "\n"
+##     ctrl+shift+w none          // unbind
+##     "ctrl+=" font-bigger       // quote chords with = / ; [ ] ( ) { } \ "
+##   }
 
 import std/[os, strutils, options]
-import kdl
+import kdl, keybinds
 
 type
   ConfigRgb* = tuple[r, g, b: uint8]
@@ -42,8 +53,11 @@ type
     command*: seq[string]
     workingDirectory*: string   ## where the first tab starts; "" = inherit
     colors*: Colors
+    keybinds*: Keybinds
 
-const defaultConfig* = Config(size: 14, cols: 100, rows: 30, scrollback: 10_000)
+proc defaultConfig*(): Config =
+  Config(size: 14, cols: 100, rows: 30, scrollback: 10_000,
+         keybinds: defaultKeybinds())
 
 proc configPath*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME")
@@ -90,10 +104,41 @@ proc parseColors(c: var Colors, nodes: seq[KdlNode], path: string) =
     of "selection-background": c.selectionBackground = col
     else: bad("unknown colour")
 
+proc parseKeybinds(kb: var Keybinds, n: KdlNode, path: string) =
+  if n.args.len != 0: warn(path, n.line, "keybinds: expected a { ... } block")
+  for (k, v) in n.props:
+    if k == "clear-defaults" and v.kind == kBool:
+      if v.bval: kb.clear()
+    else: warn(path, n.line, "keybinds: unknown property " & k)
+  for b in n.children:
+    template bad(msg: string) =
+      warn(path, b.line, "keybinds: " & b.name & ": " & msg)
+      continue
+    let (okChord, chord) = parseChord(b.name)
+    if not okChord: bad("not a key chord like ctrl+shift+t")
+    if b.args.len == 0 or b.args[0].kind != kString: bad("expected an action")
+    let (okAction, action) = parseAction(b.args[0].str)
+    if not okAction: bad("unknown action " & $b.args[0])
+    var binding = Binding(action: action)
+    let rest = b.args[1 .. ^1]
+    case action
+    of acGotoTab:
+      if rest.len != 1 or rest[0].kind != kInt or rest[0].num < 1:
+        bad("expected a tab number, like: goto-tab 1")
+      binding.num = rest[0].num.int
+    of acSendText:
+      if rest.len != 1 or rest[0].kind != kString:
+        bad("expected the text to send, like: send-text \"\\n\"")
+      binding.text = rest[0].str
+    else:
+      if rest.len != 0: bad($action & " takes no arguments")
+    if action == acNone: kb.del chord
+    else: kb[chord] = binding
+
 proc parseConfig*(text: string, path = "config.kdl"): Config =
   ## Apply the settings in `text` over the defaults. Problems are reported on
   ## stderr and skipped, so a typo never keeps the terminal from starting.
-  result = defaultConfig
+  result = defaultConfig()
   var nodes: seq[KdlNode]
   try:
     nodes = parseKdl(text)
@@ -137,6 +182,7 @@ proc parseConfig*(text: string, path = "config.kdl"): Config =
       let dir = expandTilde(strArg())
       if not dirExists(dir): bad("no such directory: " & dir)
       result.workingDirectory = dir
+    of "keybinds": result.keybinds.parseKeybinds(n, path)
     of "colors":
       if n.args.len != 0 or n.props.len != 0:
         bad("expected a { ... } block of colours")
@@ -150,9 +196,9 @@ proc loadConfig*(path = ""): Config =
   let p = if path.len > 0: path else: configPath()
   if not fileExists(p):
     if path.len > 0: quit("ghostnim: config file not found: " & path, 2)
-    return defaultConfig
+    return defaultConfig()
   try:
     parseConfig(readFile(p), p)
   except IOError as e:
     warn(p, 0, e.msg)
-    defaultConfig
+    defaultConfig()

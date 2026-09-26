@@ -164,7 +164,8 @@ type
                                      data: ptr uint8, len: csize_t) {.cdecl.}
   GhosttyTerminalCallbackFn* = proc (t: GhosttyTerminal, userdata: pointer) {.cdecl.}
 
-include keys
+import keys
+export keys
 
 const
   # GhosttyResult
