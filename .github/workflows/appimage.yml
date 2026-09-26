@@ -82,9 +82,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="build-${{ github.run_number }}"
+          # Date-first names sort chronologically and say when the build is
+          # from; the short SHA ties the release back to its commit.
+          date="$(date -u +%Y-%m-%d)"
+          tag="build-$(date -u +%Y%m%d)-${{ github.run_number }}"
           gh release create "$tag" "$OUTPUT" "$OUTPUT.zsync" \
             --target "$GITHUB_SHA" \
-            --title "ghostnim build ${{ github.run_number }}" \
+            --title "ghostnim $date #${{ github.run_number }} (${GITHUB_SHA::7})" \
             --notes "Automated build of ${GITHUB_SHA::7}. Installed AppImages update to this release on their own." \
             --latest
