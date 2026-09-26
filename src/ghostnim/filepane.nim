@@ -185,13 +185,25 @@ proc drawFolderIcon(rd: Renderer, x, y, w, h: int, c: Rgb) =
   rd.fillRect(x, y + h div 6, w, h - h div 6)           # the body
 
 proc drawFileIcon(rd: Renderer, x, y, w, h: int, c: Rgb) =
+  ## A page with a folded top-right corner and a couple of text lines, so it
+  ## doesn't read as the empty box of a missing glyph.
   let l = rd.line
   let w = w * 3 div 4
+  let f = max(2 * l, w * 2 div 5)                  # size of the folded corner
   rd.setColor(c)
-  rd.fillRect(x, y, w, l)
-  rd.fillRect(x, y + h - l, w, l)
-  rd.fillRect(x, y, l, h)
-  rd.fillRect(x + w - l, y, l, h)
+  rd.fillRect(x, y, w - f, l)                      # top, up to the fold
+  rd.fillRect(x, y + h - l, w, l)                  # bottom
+  rd.fillRect(x, y, l, h)                          # left
+  rd.fillRect(x + w - l, y + f, l, h - f)          # right, below the fold
+  for i in 0 .. f - l:                             # the fold's diagonal
+    rd.fillRect(x + w - f + i, y + i, l, l)
+  rd.fillRect(x + w - f, y, l, f)                  # the fold's flap
+  rd.fillRect(x + w - f, y + f - l, f, l)
+  if h >= 8 * l:                                   # text lines, when there's room
+    let tx = x + 2 * l
+    let tw = w - 4 * l
+    rd.fillRect(tx, y + h div 2, tw, l)
+    rd.fillRect(tx, y + h div 2 + 2 * l, tw * 2 div 3, l)
 
 proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
   ## Composite the pane onto the backbuffer, in the terminal's colours. With
