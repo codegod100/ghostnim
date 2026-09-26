@@ -3,9 +3,10 @@
 ## libghostty-vt owns all terminal state. Each frame we ask it to update its
 ## render state snapshot, then walk the dirty rows/cells it reports and draw
 ## them into a persistent grid texture. Only rows libghostty marks dirty are
-## redrawn; the cursor is composited on top every frame.
+## redrawn; the cursor and the tab bar are composited on top every frame.
 
 import std/[tables, osproc, strutils, os, strtabs]
+from std/unicode import runes, runeLen, runeSubStr, `$`
 import vt, sdl, boxdraw
 
 type
@@ -29,6 +30,13 @@ type
     underline: cint
     wide: bool
 
+  TabHitKind* = enum
+    hitNone, hitTab, hitClose, hitNew
+
+  TabHit* = object
+    kind*: TabHitKind
+    index*: int
+
   Renderer* = ref object
     r*: RendererPtr
     fontPaths: array[Face, string]
@@ -38,13 +46,13 @@ type
     cellW*, cellH*: int
     ascent: int
     pad*: int                ## padding around the grid, in output pixels
+    top*: int                ## height of the tab bar above the grid
     glyphs: Table[(string, int), Glyph]
     fallbackByFile: Table[string, FontPtr]
     fallbackForCp: Table[uint32, FontPtr]
     grid: TexturePtr
     gridW, gridH: int
     cells: seq[seq[CellInfo]]
-    state*: GhosttyRenderState
     rowIter: GhosttyRenderStateRowIterator
     rowCells: GhosttyRenderStateRowCells
     colors*: GhosttyRenderStateColors
@@ -153,6 +161,7 @@ proc loadFonts(rd: Renderer) =
   rd.cellH = max(1, fontLineSkip(rd.fonts[faceRegular]).int)
   rd.ascent = fontAscent(rd.fonts[faceRegular]).int
   rd.pad = int(4.0 * rd.scale)
+  rd.top = rd.cellH + int(10.0 * rd.scale)
 
 proc clearGlyphCache(rd: Renderer) =
   for g in rd.glyphs.values: destroyTexture(g.tex)
@@ -166,7 +175,6 @@ proc newRenderer*(r: RendererPtr, fontPaths: array[Face, string], fontSize: int,
   result = Renderer(r: r, fontPaths: fontPaths, fontSize: fontSize, scale: scale,
                     focused: true)
   result.loadFonts()
-  check ghostty_render_state_new(nil, addr result.state), "ghostty_render_state_new"
   check ghostty_render_state_row_iterator_new(nil, addr result.rowIter),
     "ghostty_render_state_row_iterator_new"
   check ghostty_render_state_row_cells_new(nil, addr result.rowCells),
@@ -185,11 +193,15 @@ proc destroy*(rd: Renderer) =
   if rd.grid != nil: destroyTexture(rd.grid)
   ghostty_render_state_row_cells_free(rd.rowCells)
   ghostty_render_state_row_iterator_free(rd.rowIter)
-  ghostty_render_state_free(rd.state)
+
+proc newRenderState*(): GhosttyRenderState =
+  ## Each terminal gets its own render state so dirty tracking stays per tab.
+  check ghostty_render_state_new(nil, addr result), "ghostty_render_state_new"
 
 proc gridSize*(rd: Renderer, outW, outH: int): (int, int) =
   ## Number of (cols, rows) that fit in an output area of the given size.
-  (max(1, (outW - 2 * rd.pad) div rd.cellW), max(1, (outH - 2 * rd.pad) div rd.cellH))
+  (max(1, (outW - 2 * rd.pad) div rd.cellW),
+   max(1, (outH - rd.top - 2 * rd.pad) div rd.cellH))
 
 proc resize*(rd: Renderer, outW, outH: int) =
   ## Recreate the grid texture for a new output size.
@@ -286,7 +298,7 @@ proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
   discard renderCopy(rd.r, g.tex, nil, addr dst)
 
 proc cellX(rd: Renderer, col: int): int = rd.pad + col * rd.cellW
-proc cellY(rd: Renderer, row: int): int = rd.pad + row * rd.cellH
+proc cellY(rd: Renderer, row: int): int = rd.top + rd.pad + row * rd.cellH
 
 proc drawGlyph(rd: Renderer, cell: CellInfo, col, row: int, fg: Rgb) =
   if cell.text.len == 0 or cell.invisible or cell.text == " ": return
@@ -443,16 +455,17 @@ proc drawCursor(rd: Renderer, cursor: GhosttyRenderStateCursor) =
     let bg = if cell.hasBg: cell.bg else: rgb(rd.colors.background)
     rd.drawGlyph(cell, col, row, bg)
 
-proc draw*(rd: Renderer, term: GhosttyTerminal, force: bool, blinkOn: bool) =
-  ## Update the render state from `term` and draw a frame into the
-  ## backbuffer (call `renderPresent` afterwards).
-  check ghostty_render_state_update(rd.state, term), "ghostty_render_state_update"
+proc draw*(rd: Renderer, state: GhosttyRenderState, term: GhosttyTerminal,
+           force: bool, blinkOn: bool) =
+  ## Update `state` from `term` and draw a frame into the backbuffer (call
+  ## `renderPresent` afterwards).
+  check ghostty_render_state_update(state, term), "ghostty_render_state_update"
   var dirty: cint
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_DIRTY, addr dirty)
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_COLORS, addr rd.colors)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_DIRTY, addr dirty)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_COLORS, addr rd.colors)
   var cols, rows: uint16
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_COLS, addr cols)
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_ROWS, addr rows)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_COLS, addr cols)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_ROWS, addr rows)
 
   var full = force or dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL
   if rd.cells.len != rows.int or (rows > 0 and rd.cells[0].len != cols.int):
@@ -465,7 +478,7 @@ proc draw*(rd: Renderer, term: GhosttyTerminal, force: bool, blinkOn: bool) =
     if full:
       rd.setColor(rgb(rd.colors.background))
       discard renderClear(rd.r)
-    discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
+    discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                                      addr rd.rowIter)
     var row = 0
     while ghostty_render_state_row_iterator_next(rd.rowIter) and row < rd.cells.len:
@@ -476,7 +489,7 @@ proc draw*(rd: Renderer, term: GhosttyTerminal, force: bool, blinkOn: bool) =
         let sel = rd.readRow(row)
         rd.drawRow(row, sel)
       inc row
-    discard ghostty_render_state_clean(rd.state)
+    discard ghostty_render_state_clean(state)
     discard setRenderTarget(rd.r, nil)
 
   rd.setColor(rgb(rd.colors.background))
@@ -484,11 +497,85 @@ proc draw*(rd: Renderer, term: GhosttyTerminal, force: bool, blinkOn: bool) =
   discard renderCopy(rd.r, rd.grid, nil, nil)
 
   var cursor = initSized(GhosttyRenderStateCursor)
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_CURSOR, addr cursor)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR, addr cursor)
   if cursor.visible and cursor.viewport_has_value and (blinkOn or not cursor.blinking):
     rd.drawCursor(cursor)
 
-proc cursorBlinking*(rd: Renderer): bool =
+proc cursorBlinking*(rd: Renderer, state: GhosttyRenderState): bool =
   var cursor = initSized(GhosttyRenderStateCursor)
-  discard ghostty_render_state_get(rd.state, GHOSTTY_RENDER_STATE_DATA_CURSOR, addr cursor)
+  discard ghostty_render_state_get(state, GHOSTTY_RENDER_STATE_DATA_CURSOR, addr cursor)
   cursor.visible and cursor.blinking
+
+# --- tab bar ---------------------------------------------------------------
+
+proc mix(a, b: Rgb, t: float): Rgb =
+  template m(x, y: uint8): uint8 = uint8(float(x) + (float(y) - float(x)) * t + 0.5)
+  Rgb(r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b))
+
+proc tabWidth(rd: Renderer, n: int): int =
+  ## Tabs share the bar left of the "+" button, up to a comfortable maximum.
+  max(1, min(32 * rd.cellW, (rd.gridW - rd.top) div max(1, n)))
+
+proc closeWidth(rd: Renderer, tabW: int): int = min(3 * rd.cellW, tabW div 3)
+
+proc hitTabBar*(rd: Renderer, n, x, y: int): TabHit =
+  ## What lies under output pixel (x, y) in a bar showing `n` tabs.
+  if y < 0 or y >= rd.top or x < 0: return
+  let tabW = rd.tabWidth(n)
+  let i = x div tabW
+  if i < n:
+    let kind = if x >= (i + 1) * tabW - rd.closeWidth(tabW): hitClose else: hitTab
+    return TabHit(kind: kind, index: i)
+  if x >= n * tabW and x < n * tabW + rd.top:
+    return TabHit(kind: hitNew)
+
+proc drawCellText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceRegular) =
+  ## Draw one line of text on the cell grid (one cell per codepoint).
+  var cx = x
+  for r in text.runes:
+    let g = rd.glyph($r, face)
+    if g.tex != nil:
+      var dst = Rect(x: cint(cx), y: cint(y), w: g.w, h: g.h)
+      discard setTextureColorMod(g.tex, fg.r, fg.g, fg.b)
+      discard setTextureAlphaMod(g.tex, 255)
+      discard renderCopy(rd.r, g.tex, nil, addr dst)
+    cx += rd.cellW
+
+proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
+  ## Draw the tab bar across the top of the window. Call after `draw`, which
+  ## refreshes the colours from the active terminal.
+  let bg = rgb(rd.colors.background)
+  let fg = rgb(rd.colors.foreground)
+  let accent = if rd.colors.cursor_has_value: rgb(rd.colors.cursor) else: fg
+  let barBg = mix(bg, fg, 0.08)
+  let n = titles.len
+  let tabW = rd.tabWidth(n)
+  let closeW = rd.closeWidth(tabW)
+  let textY = (rd.top - rd.cellH) div 2
+  let line = max(1, int(rd.scale))
+  rd.setColor(barBg)
+  rd.fillRect(0, 0, rd.gridW, rd.top)
+  for i, title in titles:
+    let x = i * tabW
+    let isActive = i == active
+    if isActive:
+      rd.setColor(bg)
+      rd.fillRect(x, 0, tabW, rd.top)
+      rd.setColor(accent)
+      rd.fillRect(x, 0, tabW, 2 * line)
+    elif i + 1 != active:
+      rd.setColor(mix(bg, fg, 0.25))
+      rd.fillRect(x + tabW - line, rd.top div 4, line, rd.top div 2)
+    let textFg = if isActive: fg else: mix(bg, fg, 0.6)
+    # Title, cut to the space left of the close button.
+    let maxChars = (tabW - closeW - rd.cellW) div rd.cellW
+    var label = if title.len > 0: title else: "shell"
+    if label.runeLen > maxChars:
+      label = if maxChars > 1: label.runeSubStr(0, maxChars - 1) & "…" else: ""
+    rd.drawCellText(label, x + rd.cellW, textY, textFg, if isActive: faceBold else: faceRegular)
+    rd.drawCellText("×", x + tabW - closeW + (closeW - rd.cellW) div 2, textY, textFg)
+  rd.drawCellText("+", n * tabW + (rd.top - rd.cellW) div 2, textY, mix(bg, fg, 0.6))
+  rd.setColor(mix(bg, fg, 0.2))
+  let activeX = active * tabW
+  rd.fillRect(0, rd.top - line, activeX, line)
+  rd.fillRect(activeX + tabW, rd.top - line, rd.gridW - activeX - tabW, line)

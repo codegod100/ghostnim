@@ -219,6 +219,7 @@ proc atomicGet*(a: ptr AtomicInt): cint {.sdl, importc: "SDL_AtomicGet".}
 proc createThread*(fn: ThreadFunction, name: cstring, data: pointer): ptr Thread {.
   sdl, importc: "SDL_CreateThread".}
 proc detachThread*(t: ptr Thread) {.sdl, importc: "SDL_DetachThread".}
+proc waitThread*(t: ptr Thread, status: ptr cint) {.sdl, importc: "SDL_WaitThread".}
 
 # SDL_ttf
 proc ttfInit*(): cint {.ttf, importc: "TTF_Init".}
