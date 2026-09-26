@@ -139,6 +139,7 @@ copy-on-select #true
 //   send-text "..."         type text into the program, e.g. "\n" or "\u{1b}b"
 //   reload-config           re-read this file (it also reloads when saved)
 //   open-config             edit this file ($VISUAL/$EDITOR in a new tab)
+//   toggle-file-pane        show or hide the file manager left of the terminal
 //   none                    unbind the chord
 keybinds {
   ctrl+shift+c copy
@@ -159,6 +160,7 @@ keybinds {
   ctrl+0 font-reset
   ctrl+shift+, reload-config
   ctrl+, open-config
+  ctrl+shift+e toggle-file-pane
 
   // More examples, off until you remove the `/-`:
   /-alt+1 goto-tab 1

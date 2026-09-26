@@ -137,6 +137,7 @@ const
   BUTTON_RIGHT* = 3'u8
   MOUSEWHEEL_FLIPPED* = 1'u32
   SYSTEM_CURSOR_ARROW* = 0.cint   ## SDL_SystemCursor
+  SYSTEM_CURSOR_SIZEWE* = 7.cint
   SYSTEM_CURSOR_HAND* = 11.cint
 
   # Keymods
@@ -187,6 +188,8 @@ proc renderDrawLine*(r: RendererPtr, x1, y1, x2, y2: cint): cint {.
   sdl, importc: "SDL_RenderDrawLine".}
 proc renderCopy*(r: RendererPtr, t: TexturePtr, src, dst: ptr Rect): cint {.
   sdl, importc: "SDL_RenderCopy".}
+proc renderSetClipRect*(r: RendererPtr, rect: ptr Rect): cint {.
+  sdl, importc: "SDL_RenderSetClipRect".}
 proc renderPresent*(r: RendererPtr) {.sdl, importc: "SDL_RenderPresent".}
 proc setRenderTarget*(r: RendererPtr, t: TexturePtr): cint {.sdl, importc: "SDL_SetRenderTarget".}
 proc renderReadPixels*(r: RendererPtr, rect: ptr Rect, format: uint32, pixels: pointer,

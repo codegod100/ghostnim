@@ -44,7 +44,8 @@ the event loop.
   a link while Ctrl is held. It works when the application has mouse
   reporting on, too.
 - Right-click context menu with Copy, Paste, Select All, zoom, Show/Hide
-  Recent Folders and Open Config, drawn in-window and navigable with the
+  Recent Folders,
+  Show/Hide File Manager and Open Config, drawn in-window and navigable with the
   arrow keys and Enter. When the application has mouse reporting on, hold
   Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
@@ -61,6 +62,16 @@ the event loop.
   tab, a click opens a new tab too. Turn the strip on or off from the
   right-click menu; the choice is remembered in
   `$XDG_STATE_HOME/ghostnim` (`~/.local/state/ghostnim`).
+- File manager: Ctrl+Shift+E (or Show File Manager in the right-click menu)
+  splits a folder listing off the left of the window. It shows the current
+  tab's directory and follows it as you `cd` or switch tabs. Click a folder to
+  `cd` there (while a program is running in the tab, the pane just browses
+  there on its own), double-click a file to open it with `xdg-open`,
+  middle-click a file to type its quoted path into the terminal, or
+  middle-click a folder to open a new tab in it. The listing updates when
+  files are added or removed; hidden files are left out. Drag the divider to
+  resize the pane; whether it's shown and its width are remembered in
+  `$XDG_STATE_HOME/ghostnim`.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours
@@ -207,7 +218,7 @@ Keybindings add to the defaults listed under Features (use
 `paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
 `goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
 `scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
-`send-text "..."`, `reload-config`, `open-config` and `none`.
+`send-text "..."`, `reload-config`, `open-config`, `toggle-file-pane` and `none`.
 
 **Open Config** in the right-click menu (or Ctrl+,) opens the file in
 `$VISUAL`/`$EDITOR` in a new tab, or with `xdg-open` if neither is set. If
@@ -233,6 +244,7 @@ stderr and skipped, so a broken config never stops the terminal from starting.
 | `src/ghostnim.nim` | App: window, tabs, event loop, pty wiring, input, selection, clipboard |
 | `src/ghostnim/vt.nim` | Nim bindings for the libghostty-vt C API |
 | `src/ghostnim/keys.nim` | `GhosttyKey` enum (generated from `key/event.h`) |
+| `src/ghostnim/filepane.nim` | The file manager pane: folder listing, layout and drawing |
 | `src/ghostnim/renderer.nim` | Walks the libghostty render state and draws cells and the tab bar with SDL |
 | `src/ghostnim/boxdraw.nim` | Procedural box-drawing and block elements |
 | `src/ghostnim/input.nim` | SDL scancode/modifier → libghostty key mapping |
