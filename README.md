@@ -20,6 +20,9 @@ the event loop.
   underline, double underline, strikethrough and overline.
 - Wide characters, plus per-glyph font fallback through fontconfig (CJK,
   symbols).
+- Font shaping through HarfBuzz: programming ligatures (Monaspace Frozen,
+  JetBrains Mono, Fira Code) and contextual alternates (Monaspace's texture healing), kept on
+  the cell grid.
 - Box-drawing and block characters drawn procedurally, so lines join
   seamlessly between cells.
 - Cursor shapes (block, bar, underline, hollow) with blinking.
@@ -50,6 +53,7 @@ the event loop.
 
 - Nim ≥ 1.6 (Nim 2.x recommended)
 - SDL2 and SDL2_ttf development packages
+- HarfBuzz (development package), for ligatures and other font shaping
 - fontconfig (`fc-match`) for font discovery and fallback (optional but
   recommended)
 - Zig 0.16 and git, to build libghostty-vt
@@ -57,9 +61,15 @@ the event loop.
 On Debian/Ubuntu:
 
 ```sh
-sudo apt install nim libsdl2-dev libsdl2-ttf-dev fontconfig fonts-dejavu-core
+sudo apt install nim libsdl2-dev libsdl2-ttf-dev libharfbuzz-dev fontconfig fonts-dejavu-core
 # Zig 0.16: https://ziglang.org/download/ (or `pip install ziglang==0.16.0`)
 ```
+
+The default font, Monaspace Neon Frozen, isn't packaged by most distros:
+copy `fonts/frozen/MonaspaceNeonFrozen-*.ttf` from a
+[Monaspace release](https://github.com/githubnext/monaspace/releases) into
+`~/.local/share/fonts`. Without it ghostnim uses Monaspace Neon if that's
+installed, else your system's `monospace` font.
 
 ### 2. Build libghostty-vt
 
@@ -94,8 +104,9 @@ This builds a release binary and packages it with
 into `build/tools` on first use. The result is
 `ghostnim-<version>-<arch>.AppImage` in the repository root. SDL2, SDL2_ttf
 and their dependencies are bundled. If your SDL2 is sdl2-compat (as on Arch),
-the SDL3 library it loads at runtime is bundled too. Fonts are still found
-through the host's fontconfig.
+the SDL3 library it loads at runtime is bundled too. Monaspace Neon Frozen
+(the default font), DejaVu Sans Mono and Symbols Nerd Font are bundled as well;
+other fonts are still found through the host's fontconfig.
 
 ### Prebuilt AppImage and updates
 
@@ -120,8 +131,10 @@ update it too. Locally built AppImages don't self-update unless built with
 ghostnim [options] [-e command [args...]]
 
   -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
-  -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
+  -f, --font NAME|PATH   font family (fontconfig) or font file   [Monaspace Neon Frozen]
   -s, --size N           font size in points                      [14]
+      --no-font-shaping  draw characters one by one: no ligatures or
+                         contextual alternates
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
@@ -142,8 +155,9 @@ Settings can also go in a [KDL](https://kdl.dev) file at
 is a node named after its command-line option, and the command line wins:
 
 ```kdl
-font "JetBrains Mono"
+font "Monaspace Neon"
 font-size 13
+font-shaping #false    // no ligatures or contextual alternates
 cols 120
 rows 36
 scrollback 50000
@@ -180,7 +194,7 @@ Keybindings add to the defaults listed under Features (use
 the file doesn't exist yet it's created from `docs/config.kdl` first.
 
 The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
-colours, keybindings and scrollback change in the open window; `command`,
+font shaping, colours, keybindings and scrollback change in the open window; `command`,
 `working-directory` and `inherit-directory` apply to new tabs, and
 `cols`/`rows` only size the first window. A file that doesn't parse is skipped and the previous settings stay.
 

@@ -7,7 +7,7 @@
 
 import std/[tables, osproc, strutils, os, strtabs, options]
 from std/unicode import runes, runeLen, runeSubStr, `$`
-import vt, sdl, boxdraw
+import vt, sdl, boxdraw, shaping
 
 type
   Face* = enum
@@ -42,6 +42,10 @@ type
     r*: RendererPtr
     fontPaths: array[Face, string]
     fonts: array[Face, FontPtr]
+    shapePaths: array[Face, string]   ## file each face was opened from; "" if synthesized
+    shaper: Shaper
+    shaping*: bool           ## draw ligatures and contextual alternates
+    runs: Table[(string, int), Glyph]   ## shaped runs, by (text, face)
     fontSize*: int
     scale*: float            ## output pixels per window pixel (HiDPI)
     cellW*, cellH*: int
@@ -112,10 +116,25 @@ proc fcList(pattern: string): seq[string] =
   except OSError:
     discard
 
+const DefaultFonts* = ["Monaspace Neon Frozen", "Monaspace Neon"]
+  ## Tried in order when no font is configured. The Frozen build has its
+  ## ligatures (ss01-ss10) and texture healing on by default, which SDL_ttf
+  ## needs since it can't turn on OpenType features; plain Monaspace Neon
+  ## still gets texture healing.
+
 proc resolveFonts*(primary: string): array[Face, string] =
   ## Find regular/bold/italic/bold-italic font files. `primary` may be a
   ## path to a font file or a fontconfig family name.
-  let family = if primary.len == 0: "monospace" else: primary
+  # fc-match never fails, it substitutes: only ask for a default family by
+  # name when it is installed (or bundled), else we could get a proportional
+  # font.
+  var family = primary
+  if family.len == 0:
+    family = "monospace"
+    for f in DefaultFonts:
+      if fcList(f).len > 0:
+        family = f
+        break
   if fileExists(primary):
     result[faceRegular] = primary
   else:
@@ -124,7 +143,8 @@ proc resolveFonts*(primary: string): array[Face, string] =
     result[faceItalic] = fcMatch(family & ":italic")
     result[faceBoldItalic] = fcMatch(family & ":bold:italic")
   if result[faceRegular].len == 0:
-    for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    for p in [bundledShare() / "fonts" / "monaspace" / "MonaspaceNeonFrozen-Regular.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
               "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
               "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
               bundledShare() / "fonts" / "dejavu" / "DejaVuSansMono.ttf"]:
@@ -142,8 +162,10 @@ proc loadFonts(rd: Renderer) =
   for f in Face:
     let path = if rd.fontPaths[f].len > 0 and rd.fontPaths[f] != rd.fontPaths[faceRegular]:
                  rd.fontPaths[f] else: ""
+    rd.shapePaths[f] = ""
     if path.len > 0:
       rd.fonts[f] = openFont(path.cstring, px)
+      if rd.fonts[f] != nil: rd.shapePaths[f] = path
     if rd.fonts[f] == nil:
       # Synthesize the style from the regular face.
       rd.fonts[f] = openFont(rd.fontPaths[faceRegular].cstring, px)
@@ -151,7 +173,7 @@ proc loadFonts(rd: Renderer) =
         raise newException(IOError, "could not open font " &
                            rd.fontPaths[faceRegular] & ": " & $getError())
       case f
-      of faceRegular: discard
+      of faceRegular: rd.shapePaths[f] = rd.fontPaths[faceRegular]
       of faceBold: setFontStyle(rd.fonts[f], TTF_STYLE_BOLD)
       of faceItalic: setFontStyle(rd.fonts[f], TTF_STYLE_ITALIC)
       of faceBoldItalic: setFontStyle(rd.fonts[f], TTF_STYLE_BOLD or TTF_STYLE_ITALIC)
@@ -168,6 +190,8 @@ proc loadFonts(rd: Renderer) =
 proc clearGlyphCache(rd: Renderer) =
   for g in rd.glyphs.values: destroyTexture(g.tex)
   rd.glyphs.clear()
+  for g in rd.runs.values: destroyTexture(g.tex)
+  rd.runs.clear()
   for f in rd.fallbackByFile.values: closeFont(f)
   rd.fallbackByFile.clear()
   rd.fallbackForCp.clear()
@@ -175,7 +199,7 @@ proc clearGlyphCache(rd: Renderer) =
 proc newRenderer*(r: RendererPtr, fontPaths: array[Face, string], fontSize: int,
                   scale: float): Renderer =
   result = Renderer(r: r, fontPaths: fontPaths, fontSize: fontSize, scale: scale,
-                    focused: true)
+                    focused: true, shaping: true)
   result.loadFonts()
   check ghostty_render_state_row_iterator_new(nil, addr result.rowIter),
     "ghostty_render_state_row_iterator_new"
@@ -185,6 +209,7 @@ proc newRenderer*(r: RendererPtr, fontPaths: array[Face, string], fontSize: int,
 
 proc setFonts*(rd: Renderer, fontPaths: array[Face, string]) =
   rd.fontPaths = fontPaths
+  rd.shaper.reset()
   rd.clearGlyphCache()
   rd.loadFonts()
 
@@ -195,6 +220,7 @@ proc setFontSize*(rd: Renderer, size: int) =
 
 proc destroy*(rd: Renderer) =
   rd.clearGlyphCache()
+  rd.shaper.destroy()
   for f in Face:
     if rd.fonts[f] != nil: closeFont(rd.fonts[f])
   if rd.grid != nil: destroyTexture(rd.grid)
@@ -351,6 +377,44 @@ proc drawGlyph(rd: Renderer, cell: CellInfo, col, row: int, fg: Rgb) =
   discard setTextureAlphaMod(g.tex, if cell.faint: 128'u8 else: 255'u8)
   discard renderCopy(rd.r, g.tex, nil, addr dst)
 
+proc runnable(rd: Renderer, cell: CellInfo): bool =
+  ## Whether `cell` can join a shaped run: one character in the cell's own
+  ## (non-synthesized) face, not wide, not drawn by boxdraw or a fallback font.
+  if cell.text.len == 0 or cell.invisible or cell.wide or
+     rd.shapePaths[cell.face].len == 0 or cell.text.runeLen != 1: return false
+  if cell.text.len == 3 and isSpecial(firstCodepoint(cell.text)): return false
+  rd.fontFor(cell.face, cell.text) == rd.fonts[cell.face]
+
+proc drawRun(rd: Renderer, cells: openArray[CellInfo], first, last, row: int,
+             fg: Rgb): bool =
+  ## Draw cells first ..< last as one shaped string, if shaping changes them.
+  ## False (nothing drawn) if they should be drawn cell by cell instead.
+  var text = ""
+  for i in first ..< last: text.add cells[i].text
+  if text.strip(leading = true, trailing = true, chars = {' '}).len == 0: return false
+  let face = cells[first].face
+  if rd.shaper.runKind(rd.shapePaths[face], text) != runShaped: return false
+  let key = (text, ord(face))
+  var g = rd.runs.getOrDefault(key)
+  if g.tex == nil:
+    if rd.runs.len >= 1024:
+      for old in rd.runs.values: destroyTexture(old.tex)
+      rd.runs.clear()
+    let surf = renderUTF8Blended(rd.fonts[face], text.cstring,
+                                 Color(r: 255, g: 255, b: 255, a: 255))
+    if surf == nil: return false
+    g = Glyph(tex: createTextureFromSurface(rd.r, surf), w: surf.w, h: surf.h,
+              color: isColorSurface(surf))
+    freeSurface(surf)
+    if g.tex == nil: return false
+    discard setTextureBlendMode(g.tex, BLENDMODE_BLEND)
+    rd.runs[key] = g
+  var dst = Rect(x: cint(rd.cellX(first)), y: cint(rd.cellY(row)), w: g.w, h: g.h)
+  g.tint(fg)
+  discard setTextureAlphaMod(g.tex, if cells[first].faint: 128'u8 else: 255'u8)
+  discard renderCopy(rd.r, g.tex, nil, addr dst)
+  true
+
 proc drawDecorations(rd: Renderer, cell: CellInfo, col, row: int, fg: Rgb) =
   let x = rd.cellX(col)
   let y = rd.cellY(row)
@@ -455,11 +519,22 @@ proc drawRow(rd: Renderer, row: int, sel: tuple[selStart, selEnd: int]) =
     if drawBg:
       rd.setColor(bg)
       rd.fillRect(rd.cellX(x), y, rd.cellW, rd.cellH)
-  # Pass 2: glyphs and decorations.
-  for x, c in cells:
+  # Pass 2: glyphs and decorations. Neighbouring cells that share a face and
+  # colour form a run, which is drawn shaped if that changes how it looks.
+  var x = 0
+  while x < cells.len:
+    let c = cells[x]
     let (fg, _, _) = rd.resolvedColors(c, isSel(x))
-    rd.drawGlyph(c, x, row, fg)
-    rd.drawDecorations(c, x, row, fg)
+    var last = x + 1
+    if rd.shaping and rd.runnable(c):
+      while last < cells.len and cells[last].face == c.face and
+            cells[last].faint == c.faint and rd.runnable(cells[last]) and
+            rd.resolvedColors(cells[last], isSel(last))[0] == fg:
+        inc last
+    if last - x < 2 or not rd.drawRun(cells, x, last, row, fg):
+      for i in x ..< last: rd.drawGlyph(cells[i], i, row, fg)
+    for i in x ..< last: rd.drawDecorations(cells[i], i, row, fg)
+    x = last
 
 proc drawCursor(rd: Renderer, cursor: GhosttyRenderStateCursor) =
   let col = cursor.viewport_x.int

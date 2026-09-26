@@ -6,8 +6,9 @@
 # ghostnim-<version>-<arch>.AppImage into the repository root. Bundled:
 #   - shared libraries (SDL2, SDL2_ttf, freetype, ...; SDL3 for sdl2-compat)
 #   - fc-match and fc-list, which ghostnim runs to find fonts
-#   - DejaVu Sans Mono (default font) and Symbols Nerd Font (icon fallback),
-#     plus a fontconfig config that adds them to the host's fonts
+#   - Monaspace Neon Frozen (default font), DejaVu Sans Mono (fallback) and
+#     Symbols Nerd Font (icon fallback), plus a fontconfig config that adds
+#     them to the host's fonts
 #   - the icon, as SVG and a 256x256 PNG rendered from it
 #     (scripts/build-icons.sh, which also renders the embedded window icon)
 #
@@ -23,7 +24,8 @@
 #   LDAI_UPDATE_INFORMATION   update information to embed; linuxdeploy then
 #                 also writes <OUTPUT>.zsync (see .github/workflows/appimage.yml)
 #   SKIP_BUILD=1  package the existing ./ghostnim instead of rebuilding
-#   DEJAVU_VERSION, NERD_FONTS_VERSION   bundled font releases
+#   MONASPACE_VERSION, DEJAVU_VERSION, NERD_FONTS_VERSION
+#                 bundled font releases
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,6 +35,7 @@ TOOLS="$BUILD/tools"
 ARCH=$(uname -m)
 VERSION=${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/ghostnim.nimble")}
 OUTPUT=${OUTPUT:-ghostnim-$VERSION-$ARCH.AppImage}
+MONASPACE_VERSION=${MONASPACE_VERSION:-1.200}
 DEJAVU_VERSION=${DEJAVU_VERSION:-2.37}
 NERD_FONTS_VERSION=${NERD_FONTS_VERSION:-3.4.0}
 
@@ -83,6 +86,20 @@ fetch_font() { # name url
   rm "$TOOLS/$1.archive"
   mv "$TOOLS/$1.part" "$TOOLS/$1"
 }
+# Monaspace's release zip is ~1 GB, so fetch just the files we ship from the
+# release tag.
+monaspace="$TOOLS/monaspace-$MONASPACE_VERSION"
+if [ ! -d "$monaspace" ]; then
+  echo "fetching monaspace-$MONASPACE_VERSION"
+  rm -rf "$monaspace.part" && mkdir -p "$monaspace.part"
+  for f in LICENSE fonts/frozen/MonaspaceNeonFrozen-Regular.ttf \
+           fonts/frozen/MonaspaceNeonFrozen-Bold.ttf fonts/frozen/MonaspaceNeonFrozen-Italic.ttf \
+           fonts/frozen/MonaspaceNeonFrozen-BoldItalic.ttf; do
+    curl -fL --retry 3 -o "$monaspace.part/$(basename "$f")" \
+      "https://raw.githubusercontent.com/githubnext/monaspace/v$MONASPACE_VERSION/$f"
+  done
+  mv "$monaspace.part" "$monaspace"
+fi
 fetch_font "dejavu-$DEJAVU_VERSION" \
   "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_$(echo "$DEJAVU_VERSION" | tr . _)/dejavu-fonts-ttf-$DEJAVU_VERSION.tar.bz2"
 fetch_font "nerd-fonts-symbols-$NERD_FONTS_VERSION" \
@@ -104,8 +121,9 @@ fi
 
 rm -rf "$APPDIR"
 share="$APPDIR/usr/share/ghostnim"
-mkdir -p "$share/fonts/dejavu" "$share/fonts/nerd-fonts-symbols"
+mkdir -p "$share/fonts/monaspace" "$share/fonts/dejavu" "$share/fonts/nerd-fonts-symbols"
 cp "$ROOT/packaging/fonts.conf" "$share/fonts.conf"
+cp "$monaspace"/* "$share/fonts/monaspace/"
 dejavu="$TOOLS/dejavu-$DEJAVU_VERSION/dejavu-fonts-ttf-$DEJAVU_VERSION"
 cp "$dejavu"/ttf/DejaVuSansMono*.ttf "$dejavu/LICENSE" "$share/fonts/dejavu/"
 nerd="$TOOLS/nerd-fonts-symbols-$NERD_FONTS_VERSION"
