@@ -1,7 +1,9 @@
 // ghostnim config file
 //
-// Copy this to ~/.config/ghostnim/config.kdl (or
-// $XDG_CONFIG_HOME/ghostnim/config.kdl), or point at it with --config FILE.
+// It lives at ~/.config/ghostnim/config.kdl (or
+// $XDG_CONFIG_HOME/ghostnim/config.kdl), or wherever --config FILE points.
+// "Open Config" in the right-click menu (Ctrl+,) opens it in $VISUAL or
+// $EDITOR, creating it with this content first if it doesn't exist yet.
 //
 // Every setting is optional, and each one below is set to its default, so
 // this file changes nothing until you edit it. Options given on the command
@@ -109,6 +111,7 @@ scrollback 10000
 //   font-bigger, font-smaller, font-reset
 //   send-text "..."         type text into the program, e.g. "\n" or "\u{1b}b"
 //   reload-config           re-read this file (it also reloads when saved)
+//   open-config             edit this file ($VISUAL/$EDITOR in a new tab)
 //   none                    unbind the chord
 keybinds {
   ctrl+shift+c copy
@@ -125,6 +128,7 @@ keybinds {
   ctrl+- font-smaller
   ctrl+0 font-reset
   ctrl+shift+, reload-config
+  ctrl+, open-config
 
   // More examples, off until you remove the `/-`:
   /-alt+1 goto-tab 1

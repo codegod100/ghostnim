@@ -31,6 +31,7 @@ type
     acFontReset = "font-reset"
     acSendText = "send-text"         ## arg: text written to the program
     acReloadConfig = "reload-config"
+    acOpenConfig = "open-config"
 
   Mod* = enum mCtrl, mShift, mAlt, mSuper
 
@@ -114,3 +115,26 @@ proc defaultKeybinds*(): Keybinds =
   b "ctrl+-", acFontSmaller
   b "ctrl+0", acFontReset
   b "ctrl+shift+,", acReloadConfig
+  b "ctrl+,", acOpenConfig
+
+proc label(c: Chord): string =
+  ## "Ctrl+Shift+C", for showing in the menu.
+  for m in [mCtrl, mShift, mAlt, mSuper]:
+    if m in c.mods: result.add ["Ctrl", "Shift", "Alt", "Super"][m.ord] & "+"
+  const punct = {gkEqual: "=", gkMinus: "-", gkComma: ",", gkPeriod: ".",
+                 gkSlash: "/", gkSemicolon: ";", gkQuote: "'", gkBackquote: "`",
+                 gkBracketLeft: "[", gkBracketRight: "]", gkBackslash: "\\"}
+  for (k, s) in punct:
+    if k == c.key: return result & s
+  var name = ($c.key)[2 .. ^1]
+  if name.startsWith("Digit"): name = name[5 .. ^1]
+  elif name.startsWith("Arrow"): name = name[5 .. ^1]
+  result.add name
+
+proc shortcutLabel*(kb: Keybinds, action: Action): string =
+  ## The shortest chord bound to `action`, or "" if none.
+  for c, b in kb:
+    if b.action == action:
+      let l = c.label
+      if result.len == 0 or l.len < result.len or (l.len == result.len and l < result):
+        result = l

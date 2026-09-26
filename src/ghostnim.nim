@@ -33,10 +33,11 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
+  Ctrl+,                        open the config file in $VISUAL/$EDITOR
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 
-Right-click opens a menu with copy, paste, select all and zoom (hold Shift
-to open it when the application has mouse reporting on).
+Right-click opens a menu with copy, paste, select all, zoom and Open Config
+(hold Shift to open it when the application has mouse reporting on).
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
@@ -271,8 +272,9 @@ proc applySelectionColors(app: App) =
   app.rd.selectionFg = toRgb(app.opts.colors.selectionForeground)
   app.rd.selectionBg = toRgb(app.opts.colors.selectionBackground)
 
-proc newTab(app: App, cwd = ""): Tab =
-  ## A terminal plus a child on a pty, sized to the current window.
+proc newTab(app: App, cwd = "", command: seq[string] = @[]): Tab =
+  ## A terminal plus a child on a pty, sized to the current window, running
+  ## `command` (default: the configured shell).
   let (w, h) = app.outputSize()
   let (cols, rows) = app.rd.gridSize(w, h)
   let tab = Tab(id: app.nextId, state: newRenderState())
@@ -289,7 +291,7 @@ proc newTab(app: App, cwd = ""): Tab =
   discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
                                cast[pointer](onTitleChanged))
   app.applyColors(tab.term)
-  tab.pty = spawn(app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH,
+  tab.pty = spawn(if command.len > 0: command else: app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH,
                   if cwd.len > 0: cwd else: app.opts.workingDirectory)
   tab.watch = cast[ptr PtyWatch](allocShared0(sizeof(PtyWatch)))
   tab.watch.fd = tab.pty.fd
@@ -315,9 +317,9 @@ proc activate(app: App, i: int) =
   app.needsFull = true
   app.updateWindowTitle()
 
-proc addTab(app: App) =
+proc addTab(app: App, command: seq[string] = @[]) =
   ## Open a tab next to the current one, in the current tab's directory.
-  let tab = app.newTab(app.cur.pty.cwd)
+  let tab = app.newTab(app.cur.pty.cwd, command)
   app.tabs.insert(tab, app.active + 1)
   app.activate(app.active + 1)
 
@@ -508,6 +510,21 @@ proc reloadConfig(app: App) =
   app.needsFull = true
   stderr.writeLine "ghostnim: reloaded " & configFile(app.cli.configPath)
 
+proc openConfig(app: App) =
+  ## Open the config file for editing, creating it from the commented
+  ## defaults first if needed. $VISUAL or $EDITOR runs in a new tab;
+  ## without either, the desktop's handler for the file (xdg-open).
+  let path = configFile(app.cli.configPath)
+  if not ensureConfigFile(path): return
+  let editor = getEnv("VISUAL", getEnv("EDITOR"))
+  if editor.len > 0:
+    # Through sh so an $EDITOR with arguments ("code --wait") works.
+    app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path])
+  elif findExe("xdg-open").len > 0:
+    discard execShellCmd("xdg-open " & quoteShell(path) & " >/dev/null 2>&1 &")
+  else:
+    app.addTab(@["vi", path])
+
 proc checkConfigChanged(app: App) =
   ## Poll the config file (at most once a second) and reload when it changes.
   let now = getTicks()
@@ -528,6 +545,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maZoomIn: app.zoom(app.rd.fontSize + 1)
   of maZoomOut: app.zoom(app.rd.fontSize - 1)
   of maZoomReset: app.zoom(app.opts.size)
+  of maOpenConfig: app.openConfig()
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -569,6 +587,7 @@ proc runAction(app: App, b: Binding) =
   of acFontReset: app.zoom(app.opts.size)
   of acSendText: app.sendInput(b.text)
   of acReloadConfig: app.reloadConfig()
+  of acOpenConfig: app.openConfig()
 
 proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
   ## Keybindings from the config (or the defaults). True if the key was used.
@@ -699,14 +718,17 @@ proc reportMouse(app: App): bool =
 proc openMenu(app: App, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let (w, h) = app.outputSize()
+  let kb = app.opts.keybinds
   app.menu.show(app.rd, @[
-    item("Copy", maCopy, "Ctrl+Shift+C", app.hasSelection()),
-    item("Paste", maPaste, "Ctrl+Shift+V", hasClipboardText() != 0),
-    item("Select All", maSelectAll),
+    item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
+    item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
+    item("Select All", maSelectAll, kb.shortcutLabel(acSelectAll)),
     separator(),
-    item("Zoom In", maZoomIn, "Ctrl+="),
-    item("Zoom Out", maZoomOut, "Ctrl+-"),
-    item("Reset Zoom", maZoomReset, "Ctrl+0"),
+    item("Zoom In", maZoomIn, kb.shortcutLabel(acFontBigger)),
+    item("Zoom Out", maZoomOut, kb.shortcutLabel(acFontSmaller)),
+    item("Reset Zoom", maZoomReset, kb.shortcutLabel(acFontReset)),
+    separator(),
+    item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
   ], int(px), int(py), w, h)
 
 proc menuMouseButton(app: App, e: MouseButtonEvent, down: bool) =

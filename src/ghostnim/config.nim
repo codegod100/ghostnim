@@ -198,6 +198,21 @@ proc parseConfig*(text: string, path = "config.kdl"): Config =
   var ok: bool
   parseConfig(text, path, ok)
 
+const defaultConfigText* = staticRead("../../docs/config.kdl")
+  ## Written out by "Open Config" when there's no config file yet.
+
+proc ensureConfigFile*(path: string): bool =
+  ## Create `path` from the commented defaults if it doesn't exist. False if
+  ## it couldn't be created.
+  if fileExists(path): return true
+  try:
+    createDir(path.parentDir)
+    writeFile(path, defaultConfigText)
+    true
+  except OSError, IOError:
+    warn(path, 0, "could not create: " & getCurrentExceptionMsg().splitLines[0])
+    false
+
 proc configFile*(path = ""): string =
   ## The file to read: `path` if given, else the default location.
   if path.len > 0: path else: configPath()

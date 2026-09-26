@@ -29,9 +29,9 @@ the event loop.
   SGR and more). Hold Shift to select instead.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
   with bracketed paste.
-- Right-click context menu with Copy, Paste, Select All and zoom, drawn
-  in-window and navigable with the arrow keys and Enter. When the application
-  has mouse reporting on, hold Shift to open it.
+- Right-click context menu with Copy, Paste, Select All, zoom and Open
+  Config, drawn in-window and navigable with the arrow keys and Enter. When
+  the application has mouse reporting on, hold Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
 - Tabs, each with its own shell and terminal state. The tab bar shows each
   tab's OSC title. Click a tab to switch to it, click × (or middle-click the
@@ -170,7 +170,11 @@ Keybindings add to the defaults listed under Features (use
 `paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
 `goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
 `scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
-`send-text "..."`, `reload-config` and `none`.
+`send-text "..."`, `reload-config`, `open-config` and `none`.
+
+**Open Config** in the right-click menu (or Ctrl+,) opens the file in
+`$VISUAL`/`$EDITOR` in a new tab, or with `xdg-open` if neither is set. If
+the file doesn't exist yet it's created from `docs/config.kdl` first.
 
 The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
 colours, keybindings and scrollback change in the open window; `command` and
