@@ -18,6 +18,10 @@
 # Environment:
 #   LINUXDEPLOY   linuxdeploy executable     (default: download into build/tools)
 #   VERSION       version in the file name   (default: from ghostnim.nimble)
+#   OUTPUT        AppImage file name         (default: ghostnim-<version>-<arch>.AppImage)
+#   NIM_FLAGS     extra flags for `nimble build`, e.g. -d:autoUpdate
+#   LDAI_UPDATE_INFORMATION   update information to embed; linuxdeploy then
+#                 also writes <OUTPUT>.zsync (see .github/workflows/appimage.yml)
 #   SKIP_BUILD=1  package the existing ./ghostnim instead of rebuilding
 #   DEJAVU_VERSION, NERD_FONTS_VERSION   bundled font releases
 set -eu
@@ -28,6 +32,7 @@ APPDIR="$BUILD/AppDir"
 TOOLS="$BUILD/tools"
 ARCH=$(uname -m)
 VERSION=${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/ghostnim.nimble")}
+OUTPUT=${OUTPUT:-ghostnim-$VERSION-$ARCH.AppImage}
 DEJAVU_VERSION=${DEJAVU_VERSION:-2.37}
 NERD_FONTS_VERSION=${NERD_FONTS_VERSION:-3.4.0}
 
@@ -42,7 +47,8 @@ if [ "${SKIP_BUILD:-0}" != 1 ]; then
     echo "libghostty-vt not found; building it"
     sh "$ROOT/scripts/build-libghostty-vt.sh"
   fi
-  nimble build -d:release
+  # shellcheck disable=SC2086
+  nimble build -d:release ${NIM_FLAGS:-}
 fi
 [ -x "$ROOT/ghostnim" ] || { echo "error: ./ghostnim not built" >&2; exit 1; }
 
@@ -109,7 +115,7 @@ cp "$nerd/SymbolsNerdFontMono-Regular.ttf" "$nerd/LICENSE" "$share/fonts/nerd-fo
 # toolchains (e.g. .relr.dyn on Arch) and fails on them.
 # APPIMAGE_EXTRACT_AND_RUN: run linuxdeploy's own AppImages without FUSE.
 # shellcheck disable=SC2086
-NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION="$VERSION" \
+NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION="$VERSION" LDAI_OUTPUT="$OUTPUT" \
   "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --executable "$ROOT/ghostnim" \
@@ -122,4 +128,4 @@ NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 LINUXDEPLOY_OUTPUT_VERSION="$VERSION" \
     --output appimage
 
 echo
-echo "built $ROOT/ghostnim-$VERSION-$ARCH.AppImage"
+echo "built $ROOT/$OUTPUT"

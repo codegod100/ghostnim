@@ -5,7 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils]
-import ghostnim/[vt, sdl, pty, renderer, input, menu]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update]
 
 const
   version = "0.1.0"
@@ -745,6 +745,8 @@ proc setIcon(window: WindowPtr) =
 
 proc main() =
   let opts = parseOptions()
+  # Before SDL starts any threads, since this forks.
+  if opts.screenshot.len == 0: startUpdateCheck()
   discard setHint("SDL_IM_MODULE", "")   # let the platform pick its IME
   if sdl.init(INIT_VIDEO or INIT_EVENTS) != 0:
     quit("ghostnim: SDL_Init failed: " & $getError(), 1)

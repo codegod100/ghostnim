@@ -1,0 +1,79 @@
+# Build the AppImage on every push and pull request. Pushes to main also
+# publish it as the latest GitHub release, which is where installed AppImages
+# update from (src/ghostnim/update.nim, or AppImageUpdate via the embedded
+# zsync update information).
+name: AppImage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appimage-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  appimage:
+    # The oldest supported runner, so the AppImage runs on older glibc too.
+    runs-on: ubuntu-22.04
+    env:
+      OUTPUT: ghostnim-x86_64.AppImage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev fontconfig
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache libghostty-vt
+        uses: actions/cache@v4
+        with:
+          path: vendor/ghostty-vt
+          key: ghostty-vt-${{ runner.os }}-${{ hashFiles('scripts/build-libghostty-vt.sh') }}
+
+      - name: Build AppImage
+        env:
+          NIM_FLAGS: -d:autoUpdate -d:updateRepo=${{ github.repository }}
+          LDAI_UPDATE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|latest|ghostnim-x86_64.AppImage.zsync
+        run: |
+          VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' ghostnim.nimble)+${{ github.run_number }}" \
+            sh scripts/build-appimage.sh
+          ls -l "$OUTPUT" "$OUTPUT.zsync"
+
+      - name: Smoke test
+        run: |
+          APPIMAGE_EXTRACT_AND_RUN=1 ./"$OUTPUT" --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghostnim-appimage
+          path: |
+            ${{ env.OUTPUT }}
+            ${{ env.OUTPUT }}.zsync
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="build-${{ github.run_number }}"
+          gh release create "$tag" "$OUTPUT" "$OUTPUT.zsync" \
+            --target "$GITHUB_SHA" \
+            --title "ghostnim build ${{ github.run_number }}" \
+            --notes "Automated build of ${GITHUB_SHA::7}. Installed AppImages update to this release on their own." \
+            --latest
