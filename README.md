@@ -61,12 +61,15 @@ the event loop.
   also switches tabs. New tabs start in the current tab's directory.
   Keys: Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Tab /
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
-- Recent folders: a strip under the tabs shows the last five directories the
-  current tab has been in, most recent first. Each tab keeps its own list
-  (a new tab starts with a copy of its parent's). Click one to `cd` there, or
+- Recent folders: a strip under the tabs shows the directories you've been in,
+  most visited first (ties go to the most recent), as many as fit. The list
+  is shared by all tabs and windows and leaves out the current tab's own
+  directory.
+  Click one to `cd` there, or
   middle-click it to open it in a new tab; if a program is running in the
   tab, a click opens a new tab too. Turn the strip on or off from the
-  right-click menu; the choice is remembered in
+  right-click menu. The folders and their visit counts, and whether the
+  strip is shown, are remembered in
   `$XDG_STATE_HOME/ghostnim` (`~/.local/state/ghostnim`).
 - File manager: Ctrl+Shift+E (or Show File Manager in the right-click menu)
   splits a folder listing off the left of the window. It shows the current
