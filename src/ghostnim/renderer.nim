@@ -674,11 +674,12 @@ proc fillTopRounded(rd: Renderer, x, y, w, h, r: int, c: Rgb) =
   rd.setColor(c)
   rd.fillRect(x + r, y, w - 2 * r, r)
   rd.fillRect(x, y + r, w, h - r)
-  let rf = r.float
-  for (cx, x0) in [(float(x + r), x), (float(x + w - r), x + w - r)]:
-    let cy = float(y + r)
+  proc corner(x0: int, cx: float) =
+    let (rf, cy) = (r.float, float(y + r))
     rd.blendSpans(x0, y, x0 + r, y + r, c, proc (px, py: float): float =
       rf + 0.5 - hypot(px - cx, py - cy))
+  corner(x, float(x + r))
+  corner(x + w - r, float(x + w - r))
 
 proc strokeSegments(rd: Renderer, segs: openArray[(float, float, float, float)],
                     width: float, c: Rgb) =
