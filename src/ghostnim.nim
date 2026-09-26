@@ -60,7 +60,7 @@ type
     title: string
     titleChanged: bool
     watch: ptr PtyWatch
-    thread: ptr Thread
+    thread: ptr SdlThread
 
   App = ref object
     opts: Options
@@ -200,12 +200,12 @@ proc newTab(app: App, cwd = ""): Tab =
   tab.watch.fd = tab.pty.fd
   tab.watch.id = tab.id
   if pipe(tab.watch.stop) != 0: raiseOSError(osLastError(), "pipe failed")
-  tab.thread = createThread(ptyWatcher, "pty-watch", tab.watch)
+  tab.thread = sdlCreateThread(ptyWatcher, "pty-watch", tab.watch)
   tab
 
 proc free(tab: Tab) =
   discard posix.write(tab.watch.stop[1], cstring("x"), 1)
-  waitThread(tab.thread, nil)
+  sdlWaitThread(tab.thread, nil)
   discard posix.close(tab.watch.stop[0])
   discard posix.close(tab.watch.stop[1])
   deallocShared(tab.watch)

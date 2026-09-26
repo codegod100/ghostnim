@@ -16,7 +16,7 @@ type
   SdlWindow* {.importc: "SDL_Window", header: sdlHeader, incompleteStruct.} = object
   SdlRenderer* {.importc: "SDL_Renderer", header: sdlHeader, incompleteStruct.} = object
   Texture* {.importc: "SDL_Texture", header: sdlHeader, incompleteStruct.} = object
-  Thread* {.importc: "SDL_Thread", header: sdlHeader, incompleteStruct.} = object
+  SdlThread* {.importc: "SDL_Thread", header: sdlHeader, incompleteStruct.} = object
   Font* {.importc: "TTF_Font", header: ttfHeader, incompleteStruct.} = object
 
   WindowPtr* = ptr SdlWindow
@@ -216,10 +216,10 @@ proc sdlFree*(p: pointer) {.sdl, importc: "SDL_free".}
 
 proc atomicSet*(a: ptr AtomicInt, v: cint): cint {.sdl, importc: "SDL_AtomicSet", discardable.}
 proc atomicGet*(a: ptr AtomicInt): cint {.sdl, importc: "SDL_AtomicGet".}
-proc createThread*(fn: ThreadFunction, name: cstring, data: pointer): ptr Thread {.
+proc sdlCreateThread*(fn: ThreadFunction, name: cstring, data: pointer): ptr SdlThread {.
   sdl, importc: "SDL_CreateThread".}
-proc detachThread*(t: ptr Thread) {.sdl, importc: "SDL_DetachThread".}
-proc waitThread*(t: ptr Thread, status: ptr cint) {.sdl, importc: "SDL_WaitThread".}
+proc sdlDetachThread*(t: ptr SdlThread) {.sdl, importc: "SDL_DetachThread".}
+proc sdlWaitThread*(t: ptr SdlThread, status: ptr cint) {.sdl, importc: "SDL_WaitThread".}
 
 # SDL_ttf
 proc ttfInit*(): cint {.ttf, importc: "TTF_Init".}
