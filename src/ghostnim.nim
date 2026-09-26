@@ -5,7 +5,8 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils, options]
-import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
+                wordsel]
 
 const
   version = "0.1.0"
@@ -40,6 +41,10 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 
+Drag to select text, double-click to select a word, path or URL, and
+triple-click to select a line. A selection is copied to the clipboard as soon
+as it's made.
+
 Ctrl+click a link (an OSC 8 hyperlink or a URL in the text) to open it.
 
 Right-click opens a menu with copy, paste, select all, zoom and Open Config
@@ -48,7 +53,8 @@ Right-click opens a menu with copy, paste, select all, zoom and Open Config
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
 `cols 120`, `rows 36`, `scrollback 50000`, `command "fish" "--login"`,
-`working-directory "~/code"`, `inherit-directory #false`, plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
+`working-directory "~/code"`, `inherit-directory #false`,
+`copy-on-select #false`, plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
@@ -71,9 +77,15 @@ type
     workingDirectory: string
     inheritDirectory: bool
     fontShaping: bool
+    copyOnSelect: bool
     colors: Colors
     keybinds: Keybinds
     screenshot: string
+
+  SelectUnit = enum
+    ## What a selection drag grows by: cells, or (after a double or triple
+    ## click) whole words or lines.
+    suCell, suWord, suLine
 
   PtyWatch = object
     ## Shared with a tab's watcher thread, so it lives outside the GC heap.
@@ -120,6 +132,9 @@ type
     ## Selection drag state (viewport cell coordinates).
     selecting: bool
     selAnchor: (int, int)
+    selUnit: SelectUnit
+    ## The word or line first clicked, which a word/line drag always keeps.
+    selAnchorStart, selAnchorEnd: (int, int)
     mouseButtons: set[uint8]
     ## Buttons whose press we handled ourselves (tab bar, Ctrl+click on a
     ## link); their release is ours too, not the terminal's.
@@ -260,6 +275,7 @@ proc merge(cfg: Config, cli: Cli): Options =
     workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
     inheritDirectory: cfg.inheritDirectory and not cli.noInheritDirectory,
     fontShaping: cfg.fontShaping and not cli.noFontShaping,
+    copyOnSelect: cfg.copyOnSelect,
     colors: cfg.colors, keybinds: cfg.keybinds, screenshot: cli.screenshot)
   if result.command.len == 0: result.command = @[defaultShell()]
 
@@ -494,9 +510,15 @@ proc copySelection(app: App) =
   if ghostty_formatter_format_alloc(fmt, nil, addr p, addr n) == GHOSTTY_SUCCESS and p != nil:
     var s = newString(n.int)
     if n > 0: copyMem(addr s[0], p, n.int)
-    discard setClipboardText(s.cstring)
+    # Selecting only blanks (e.g. double-clicking empty space) mustn't
+    # wipe out what's on the clipboard.
+    if s.strip.len > 0: discard setClipboardText(s.cstring)
     ghostty_free(nil, p, n)
   ghostty_formatter_free(fmt)
+
+proc selectAllText(app: App) =
+  app.selectAll()
+  if app.opts.copyOnSelect: app.copySelection()
 
 proc zoom(app: App, size: int) =
   app.rd.setFontSize(size)
@@ -569,7 +591,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   case action
   of maCopy: app.copySelection()
   of maPaste: app.paste()
-  of maSelectAll: app.selectAll()
+  of maSelectAll: app.selectAllText()
   of maZoomIn: app.zoom(app.rd.fontSize + 1)
   of maZoomOut: app.zoom(app.rd.fontSize - 1)
   of maZoomReset: app.zoom(app.opts.size)
@@ -595,7 +617,7 @@ proc runAction(app: App, b: Binding) =
   of acNone: discard
   of acCopy: app.copySelection()
   of acPaste: app.paste()
-  of acSelectAll: app.selectAll()
+  of acSelectAll: app.selectAllText()
   of acNewTab: app.addTab()
   of acCloseTab: app.closeTab(app.active)
   of acNextTab: app.cycleTab(1)
@@ -722,6 +744,22 @@ proc rowWraps(app: App, row: int): bool =
   ok and ghostty_grid_ref_row(addr r, addr gr) == GHOSTTY_SUCCESS and
     ghostty_row_get(gr, GHOSTTY_ROW_DATA_WRAP, addr wraps) == GHOSTTY_SUCCESS and wraps
 
+proc lineAt(app: App, row: int): tuple[first, last, cols: int, cells: seq[string]] =
+  ## The (soft-wrapped) line through viewport row `row`: its first and last
+  ## rows, and the text of each of its cells (see cellText).
+  var cols, rows: uint16
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+  result.cols = cols.int
+  result.first = row
+  while result.first > 0 and app.rowWraps(result.first - 1): dec result.first
+  result.last = row
+  while result.last < rows.int - 1 and app.rowWraps(result.last): inc result.last
+  for y in result.first .. result.last:
+    for x in 0 ..< cols.int:
+      var (okc, rc) = app.gridRef(x, y)
+      result.cells.add(if okc: cellText(rc) else: " ")
+
 proc linkAt(app: App, col, row: int): string =
   ## The link under viewport cell (col, row): its OSC 8 hyperlink if it has
   ## one, else a URL found in the text of its (soft-wrapped) line.
@@ -736,19 +774,56 @@ proc linkAt(app: App, col, row: int): string =
     else:
       result.setLen(n.int)
     return
-  var cols, rows: uint16
-  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
-  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
-  var first = row
-  while first > 0 and app.rowWraps(first - 1): dec first
-  var last = row
-  while last < rows.int - 1 and app.rowWraps(last): inc last
-  var cells: seq[string]
-  for y in first .. last:
-    for x in 0 ..< cols.int:
-      var (okc, rc) = app.gridRef(x, y)
-      cells.add(if okc: cellText(rc) else: " ")
-  result = urlAt(cells, (row - first) * cols.int + col)
+  let line = app.lineAt(row)
+  result = urlAt(line.cells, (row - line.first) * line.cols + col)
+
+# --- mouse selection ----------------------------------------------------------
+
+proc before(a, b: (int, int)): bool =
+  ## Whether viewport cell `a` comes before `b` in reading order.
+  a[1] < b[1] or (a[1] == b[1] and a[0] < b[0])
+
+proc unitAt(app: App, cell: (int, int)): ((int, int), (int, int)) =
+  ## The first and last cell of the word or line (per `selUnit`) at `cell`.
+  let line = app.lineAt(cell[1])
+  let cols = max(1, line.cols)
+  template at(i: int): (int, int) = (i mod cols, line.first + i div cols)
+  case app.selUnit
+  of suCell: (cell, cell)
+  of suLine: ((0, line.first), (cols - 1, line.last))
+  of suWord:
+    let (a, b) = wordAt(line.cells, (cell[1] - line.first) * cols + cell[0])
+    (at(a), at(b))
+
+proc startSelection(app: App, cell: (int, int), clicks: uint8) =
+  ## A left press: one click starts a cell selection, two select the word
+  ## under the pointer, three the line.
+  app.selecting = true
+  app.selAnchor = cell
+  app.selUnit = case clicks
+                of 0, 1: suCell
+                of 2: suWord
+                else: suLine
+  if app.selUnit == suCell:
+    app.clearSelection()
+    return
+  (app.selAnchorStart, app.selAnchorEnd) = app.unitAt(cell)
+  app.setSelection(app.selAnchorStart, app.selAnchorEnd)
+
+proc extendSelection(app: App, cell: (int, int)) =
+  ## A drag: select from the anchor to `cell`, by whole words or lines after
+  ## a double or triple click.
+  if app.selUnit == suCell:
+    app.setSelection(app.selAnchor, cell)
+    return
+  let (a, b) = app.unitAt(cell)
+  if a.before(app.selAnchorStart): app.setSelection(a, app.selAnchorEnd)
+  else: app.setSelection(app.selAnchorStart, if b.before(app.selAnchorEnd): app.selAnchorEnd else: b)
+
+proc finishSelection(app: App) =
+  ## The button went up: copy what was selected, with copy-on-select.
+  app.selecting = false
+  if app.opts.copyOnSelect and app.hasSelection(): app.copySelection()
 
 proc linkModifier(): bool =
   ## Ctrl (or Cmd/Super) held: clicks open links.
@@ -867,12 +942,8 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     app.sendMouse(action, sdlButton(e.button), e.x, e.y)
     return
   if e.button == BUTTON_LEFT:
-    if down:
-      app.selecting = true
-      app.selAnchor = app.cellAt(e.x, e.y)
-      app.clearSelection()
-    else:
-      app.selecting = false
+    if down: app.startSelection(app.cellAt(e.x, e.y), e.clicks)
+    elif app.selecting: app.finishSelection()
   elif e.button == BUTTON_MIDDLE and down:
     app.paste()
   elif e.button == BUTTON_RIGHT and down:
@@ -895,7 +966,7 @@ proc onMouseMotion(app: App, e: MouseMotionEvent) =
         break
     app.sendMouse(GHOSTTY_MOUSE_ACTION_MOTION, button, e.x, e.y)
   elif app.selecting:
-    app.setSelection(app.selAnchor, app.cellAt(e.x, e.y))
+    app.extendSelection(app.cellAt(e.x, e.y))
 
 proc onMouseWheel(app: App, e: MouseWheelEvent) =
   var dy = e.y

@@ -34,6 +34,23 @@ proc schemeAt(s: string, i: int): string =
     if i + sc.len <= s.len and cmpIgnoreCase(s[i ..< i + sc.len], sc) == 0:
       return sc
 
+proc urlSpan*(text: string, target: int): (int, int) =
+  ## The byte range [a, b) of the URL in `text` that covers byte `target`, or
+  ## (-1, -1) if there's none.
+  var i = 0
+  while i < text.len:
+    let sc = if i == 0 or not text[i - 1].isAlphaNumeric: text.schemeAt(i) else: ""
+    if sc.len == 0:
+      inc i
+      continue
+    var e = i
+    while e < text.len and isUrlChar(text[e]): inc e
+    trimUrl(text, i, e)
+    if e - i > sc.len and target in i ..< e:
+      return (i, e)
+    i = max(e, i + 1)
+  (-1, -1)
+
 proc urlAt*(cells: openArray[string], col: int): string =
   ## The URL covering cell `col` of a line, or "". Each entry of `cells` is
   ## that cell's text: " " for a blank cell and "" for the right half of a
@@ -46,20 +63,10 @@ proc urlAt*(cells: openArray[string], col: int): string =
     text.add c
   if cells[col].len == 0:
     target = max(0, target - 1)   # right half of a wide char: its left half
-  var i = 0
-  while i < text.len:
-    let sc = if i == 0 or not text[i - 1].isAlphaNumeric: text.schemeAt(i) else: ""
-    if sc.len == 0:
-      inc i
-      continue
-    var e = i
-    while e < text.len and isUrlChar(text[e]): inc e
-    trimUrl(text, i, e)
-    if e - i > sc.len and target in i ..< e:
-      result = text[i ..< e]
-      if sc == "www.": result = "https://" & result
-      return
-    i = max(e, i + 1)
+  let (a, b) = urlSpan(text, target)
+  if a < 0: return ""
+  result = text[a ..< b]
+  if result.toLowerAscii.startsWith("www."): result = "https://" & result
 
 when isMainModule:
   proc cellsOf(s: string): seq[string] =
