@@ -6,7 +6,36 @@
 ##
 ## Header reference: https://github.com/ghostty-org/ghostty/tree/main/include/ghostty/vt
 
+import std/[os, strutils]
+
 const vtHeader = "ghostty/vt.h"
+
+const ghosttyVtInclude {.strdefine.} = ""
+  ## Set by config.nims to the libghostty-vt include directory.
+
+when ghosttyVtInclude.len > 0:
+  # Fail early with a useful message when the headers are missing or predate
+  # the API these bindings target (e.g. a stale ./vendor/ghostty-vt), instead
+  # of cryptic C "unknown type name" errors.
+  proc firstMissingVtType(): string {.compileTime.} =
+    const required = [
+      # GhosttyRenderStateCursor is the newest (Ghostty, 2026-08-15).
+      ("render.h", "GhosttyRenderStateCursor"),
+      ("render.h", "GhosttyRenderStateColors"),
+      ("grid_ref.h", "GhosttyGridRef"),
+      ("mouse/encoder.h", "GhosttyMouseEncoderSize")]
+    for (file, name) in required:
+      let path = ghosttyVtInclude / "ghostty" / "vt" / file
+      if not fileExists(path) or "} " & name & ";" notin staticRead(path):
+        return name
+
+  when not fileExists(ghosttyVtInclude / "ghostty" / "vt.h"):
+    {.error: "libghostty-vt headers not found in " & ghosttyVtInclude &
+      ". Run `nimble vt` (or set GHOSTTY_VT_PREFIX).".}
+  elif firstMissingVtType().len > 0:
+    {.error: "libghostty-vt headers in " & ghosttyVtInclude & " are too old " &
+      "for ghostnim (no " & firstMissingVtType() & "). Rebuild with " &
+      "`rm -rf vendor/ghostty-vt && nimble vt`.".}
 
 {.pragma: vt, importc, header: vtHeader.}
 {.pragma: vtType, importc, header: vtHeader, bycopy.}

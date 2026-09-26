@@ -9,6 +9,9 @@ let prefix = block:
   if env.len > 0: env else: thisDir() / "vendor" / "ghostty-vt"
 
 switch("passC", "-I" & quoteShell(prefix / "include"))
+# Lets src/ghostnim/vt.nim verify the headers match the bindings at compile
+# time, instead of failing later with cryptic C "unknown type name" errors.
+switch("define", "ghosttyVtInclude=" & prefix / "include")
 if getEnv("GHOSTTY_VT_SHARED") == "1":
   switch("passL", "-L" & quoteShell(prefix / "lib") & " -lghostty-vt -Wl,-rpath," &
          quoteShell(prefix / "lib"))
