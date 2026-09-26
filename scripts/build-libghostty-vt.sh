@@ -11,13 +11,17 @@
 #   SIMD          true|false, SIMD-accelerated parsing (default: false)
 #                 true needs libc++ at link time, so only use it together
 #                 with GHOSTTY_VT_SHARED=1 when building ghostnim.
-#   ZIG_CPU       Zig -Dcpu target (default: baseline, runs on any x86_64;
-#                 "native" is faster but only runs on CPUs like this one)
+#   CPU           Zig -Dcpu model                      (default: baseline)
+#                 Zig otherwise targets the build machine's CPU, and the
+#                 library (static in the AppImage) then dies with SIGILL
+#                 on CPUs lacking its extensions (e.g. AVX-512). Set
+#                 CPU=native for a build that only runs on this machine.
 set -eu
 
 GHOSTTY_REF=${GHOSTTY_REF:-6301810a48aaa3426887a4316668f18833a40138}
 ZIG=${ZIG:-zig}
 SIMD=${SIMD:-false}
+CPU=${CPU:-baseline}
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SRC="$ROOT/vendor/ghostty-src"
@@ -42,13 +46,11 @@ fi
 git -C "$SRC" -c advice.detachedHead=false checkout "$GHOSTTY_REF"
 
 cd "$SRC"
-# Zig targets the build machine's CPU by default, which makes the library
-# (and any AppImage linking it) crash with SIGILL on older CPUs.
 "$ZIG" build \
   -Demit-lib-vt \
-  -Dcpu="${ZIG_CPU:-baseline}" \
   -Doptimize=ReleaseFast \
   -Dsimd="$SIMD" \
+  -Dcpu="$CPU" \
   --prefix "$PREFIX"
 
 echo

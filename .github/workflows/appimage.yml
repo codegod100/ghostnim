@@ -58,6 +58,17 @@ jobs:
       - name: Smoke test
         run: |
           APPIMAGE_EXTRACT_AND_RUN=1 ./"$OUTPUT" --help
+          # The binary must run on any x86-64 CPU (the runner's CPU has
+          # AVX-512; users' may not, and would get SIGILL). Only Wuffs's
+          # *_x86_avx2 functions may use AVX: it calls them after checking
+          # the CPU at runtime.
+          objdump -d ghostnim | awk '
+            /^[0-9a-f]+ <.*>:$/ { fn = $2 }
+            /%zmm[0-9]/ || (/%ymm[0-9]/ && fn !~ /^<wuffs_.*_x86_avx2>:$/) { bad[fn]++ }
+            END {
+              for (f in bad) { print "error: AVX/AVX-512 in " f >"/dev/stderr"; n++ }
+              exit (n > 0)
+            }'
 
       - uses: actions/upload-artifact@v4
         with:
