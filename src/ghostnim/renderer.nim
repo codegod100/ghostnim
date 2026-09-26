@@ -64,6 +64,21 @@ proc fcMatch(pattern: string): string =
   except OSError:
     discard
 
+proc fcList(pattern: string): seq[string] =
+  ## Font files matching `pattern`, monospace ones first.
+  try:
+    let (output, code) = execCmdEx("fc-list -f '%{spacing}\\t%{file}\\n' " & quoteShell(pattern))
+    if code != 0: return
+    var mono: seq[string]
+    for line in output.splitLines:
+      let parts = line.split('\t', 1)
+      if parts.len != 2 or not fileExists(parts[1]): continue
+      # fontconfig spacing: 100 = mono, 110 = charcell
+      if parts[0] in ["100", "110"]: mono.add parts[1] else: result.add parts[1]
+    result = mono & result
+  except OSError:
+    discard
+
 proc resolveFonts*(primary: string): array[Face, string] =
   ## Find regular/bold/italic/bold-italic font files. `primary` may be a
   ## path to a font file or a fontconfig family name.
@@ -187,12 +202,19 @@ proc fontFor(rd: Renderer, face: Face, text: string): FontPtr =
     let f = rd.fallbackForCp[cp]
     return if f != nil: f else: result
   var found: FontPtr = nil
-  let file = fcMatch("monospace:charset=" & toHex(cp.int, 4).toLowerAscii)
-  if file.len > 0 and file != rd.fontPaths[faceRegular]:
+  # Not `toHex(cp, 4)`: that truncates codepoints above U+FFFF (e.g. Nerd
+  # Font's Material Design icons at U+F0000+) and asks for the wrong char.
+  let charset = toHex(cp.int, if cp > 0xFFFF: 6 else: 4).toLowerAscii
+  # fc-match always returns *some* font, even one lacking the glyph, so fall
+  # back to every font fontconfig says covers it.
+  for file in @[fcMatch("monospace:charset=" & charset)] & fcList(":charset=" & charset):
+    if file.len == 0 or file == rd.fontPaths[faceRegular]: continue
     if file notin rd.fallbackByFile:
       rd.fallbackByFile[file] = openFont(file.cstring, cint(float(rd.fontSize) * rd.scale + 0.5))
     let f = rd.fallbackByFile[file]
-    if f != nil and glyphIsProvided32(f, cp) != 0: found = f
+    if f != nil and glyphIsProvided32(f, cp) != 0:
+      found = f
+      break
   rd.fallbackForCp[cp] = found
   if found != nil: result = found
 
