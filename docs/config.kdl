@@ -59,7 +59,10 @@ scrollback 10000
 
 // Directory the first tab starts in. `~` means your home directory. New tabs
 // open in the current tab's directory, unless inherit-directory is #false.
-// Default: the directory ghostnim was launched from.
+// Only used when ghostnim is launched from $HOME or / (a desktop menu or
+// launcher); started anywhere else, e.g. by a file manager's "Open Terminal
+// Here", it opens in that directory. Default: the directory ghostnim was
+// launched from.
 // Command line: -d, --working-directory.
 /-working-directory "~"
 
