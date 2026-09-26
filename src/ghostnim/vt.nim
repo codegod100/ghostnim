@@ -40,6 +40,7 @@ type
   GhosttyFormatter* = ptr GhosttyOpaqueFormatter
 
   GhosttyCell* = uint64
+  GhosttyRow* = uint64
   GhosttyMods* = uint16
   GhosttyMode* = uint16
 
@@ -170,6 +171,7 @@ export keys
 const
   # GhosttyResult
   GHOSTTY_SUCCESS* = 0.GhosttyResult
+  GHOSTTY_OUT_OF_SPACE* = -3.GhosttyResult
   GHOSTTY_NO_VALUE* = -4.GhosttyResult
 
   # GhosttyStyleColorTag
@@ -248,6 +250,9 @@ const
   # GhosttyRenderStateRowOption
   GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY* = 0.cint
 
+  # GhosttyRowData
+  GHOSTTY_ROW_DATA_WRAP* = 1.cint
+
   # GhosttyCellData / GhosttyCellWide
   GHOSTTY_CELL_DATA_WIDE* = 3.cint
   GHOSTTY_CELL_WIDE_NARROW* = 0.cint
@@ -303,6 +308,15 @@ proc ghostty_terminal_grid_ref*(terminal: GhosttyTerminal, point: GhosttyPoint,
                                 outRef: ptr GhosttyGridRef): GhosttyResult {.vt.}
 
 proc ghostty_cell_get*(cell: GhosttyCell, data: cint, outp: pointer): GhosttyResult {.vt.}
+proc ghostty_row_get*(row: GhosttyRow, data: cint, outp: pointer): GhosttyResult {.vt.}
+
+# Grid references
+proc ghostty_grid_ref_cell*(r: ptr GhosttyGridRef, outCell: ptr GhosttyCell): GhosttyResult {.vt.}
+proc ghostty_grid_ref_row*(r: ptr GhosttyGridRef, outRow: ptr GhosttyRow): GhosttyResult {.vt.}
+proc ghostty_grid_ref_graphemes*(r: ptr GhosttyGridRef, buf: ptr uint32, bufLen: csize_t,
+                                 outLen: ptr csize_t): GhosttyResult {.vt.}
+proc ghostty_grid_ref_hyperlink_uri*(r: ptr GhosttyGridRef, buf: ptr uint8, bufLen: csize_t,
+                                     outLen: ptr csize_t): GhosttyResult {.vt.}
 
 # Render state
 proc ghostty_render_state_new*(allocator: pointer,
