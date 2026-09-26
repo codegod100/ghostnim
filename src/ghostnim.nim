@@ -601,6 +601,16 @@ proc parseOptions(): Options =
     inc i
   if result.command.len == 0: result.command = @[defaultShell()]
 
+
+# Window icon, embedded so it works without any installed files.
+let iconBmp = static(staticRead("../packaging/ghostnim-128.bmp"))
+
+proc setIcon(window: WindowPtr) =
+  let icon = loadBMP_RW(rwFromConstMem(unsafeAddr iconBmp[0], cint(iconBmp.len)), 1)
+  if icon == nil: return
+  setWindowIcon(window, icon)
+  freeSurface(icon)
+
 proc main() =
   let opts = parseOptions()
   discard setHint("SDL_IM_MODULE", "")   # let the platform pick its IME
@@ -618,6 +628,7 @@ proc main() =
   app.window = createWindow("ghostnim", WINDOWPOS_CENTERED, WINDOWPOS_CENTERED, 800, 600,
                             WINDOW_RESIZABLE or WINDOW_ALLOW_HIGHDPI)
   if app.window == nil: quit("ghostnim: SDL_CreateWindow failed: " & $getError(), 1)
+  app.window.setIcon()
   var r = createRenderer(app.window, -1, RENDERER_ACCELERATED or RENDERER_TARGETTEXTURE)
   if r == nil: r = createRenderer(app.window, -1, RENDERER_TARGETTEXTURE)
   if r == nil: quit("ghostnim: SDL_CreateRenderer failed: " & $getError(), 1)

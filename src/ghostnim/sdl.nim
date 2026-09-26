@@ -196,6 +196,9 @@ proc setTextureAlphaMod*(t: TexturePtr, a: uint8): cint {.sdl, importc: "SDL_Set
 proc setTextureBlendMode*(t: TexturePtr, mode: cint): cint {.
   sdl, importc: "SDL_SetTextureBlendMode".}
 proc freeSurface*(s: SurfacePtr) {.sdl, importc: "SDL_FreeSurface".}
+proc rwFromConstMem*(mem: pointer, size: cint): pointer {.sdl, importc: "SDL_RWFromConstMem".}
+proc loadBMP_RW*(src: pointer, freesrc: cint): SurfacePtr {.sdl, importc: "SDL_LoadBMP_RW".}
+proc setWindowIcon*(w: WindowPtr, icon: SurfacePtr) {.sdl, importc: "SDL_SetWindowIcon".}
 
 proc pollEvent*(e: ptr Event): cint {.sdl, importc: "SDL_PollEvent".}
 proc waitEventTimeout*(e: ptr Event, timeout: cint): cint {.sdl, importc: "SDL_WaitEventTimeout".}
