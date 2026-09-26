@@ -6,7 +6,7 @@
 
 import std/[os, strutils, posix, sequtils, options]
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
-                wordsel]
+                wordsel, paths]
 
 const
   version = "0.1.0"
@@ -48,6 +48,8 @@ triple-click to select a line. A selection is copied to the clipboard as soon
 as it's made.
 
 Ctrl+click a link (an OSC 8 hyperlink or a URL in the text) to open it.
+Ctrl+click a path to a directory to open a new tab there, or a path to a file
+to open it in $VISUAL/$EDITOR in a new tab.
 
 Right-click opens a menu with copy, paste, select all, zoom, show/hide recent
 folders and Open Config (hold Shift to open it when the application has mouse
@@ -864,6 +866,29 @@ proc linkAt(app: App, col, row: int): string =
   let line = app.lineAt(row)
   result = urlAt(line.cells, (row - line.first) * line.cols + col)
 
+proc pathAt(app: App, col, row: int): string =
+  ## The existing file or directory named by the word under viewport cell
+  ## (col, row), relative to the tab's directory, or "".
+  let line = app.lineAt(row)
+  let i = (row - line.first) * line.cols + col
+  if i notin 0 ..< line.cells.len or line.cells[i] == " ": return ""
+  let (a, b) = wordAt(line.cells, i)
+  pathTarget(line.cells[a .. b].join, app.cur.pty.cwd)
+
+proc openPath(app: App, path: string) =
+  ## Ctrl+click on a path: a directory opens in a new tab; a file opens in
+  ## $VISUAL/$EDITOR in a new tab in its directory, or with the desktop's
+  ## handler without either.
+  if dirExists(path):
+    app.addTab(dir = path)
+    return
+  let editor = getEnv("VISUAL", getEnv("EDITOR"))
+  if editor.len > 0:
+    app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path],
+               dir = path.parentDir)
+  else:
+    openExternal(path)
+
 # --- mouse selection ----------------------------------------------------------
 
 proc before(a, b: (int, int)): bool =
@@ -917,7 +942,8 @@ proc linkModifier(): bool =
   (getModState() and (KMOD_CTRL or KMOD_GUI)) != 0
 
 proc updateLinkCursor(app: App) =
-  ## Show a hand while Ctrl is held over a link, and over a recent folder.
+  ## Show a hand while Ctrl is held over a link or path, and over a recent
+  ## folder.
   if app.tabs.len == 0: return   # the last tab just closed
   var x, y: cint
   discard getMouseState(addr x, addr y)
@@ -928,7 +954,7 @@ proc updateLinkCursor(app: App) =
       over = app.rd.hitFolderBar(app.folderLabels, px.int, py.int) >= 0
     elif linkModifier():
       let (c, r) = app.cellAt(x, y)
-      over = app.linkAt(c, r).len > 0
+      over = app.linkAt(c, r).len > 0 or app.pathAt(c, r).len > 0
   if over != app.overLink:
     app.overLink = over
     setCursor(if over: app.handCursor else: app.arrowCursor)
@@ -1024,11 +1050,20 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
       return
     if e.button == BUTTON_LEFT and linkModifier():
       # Ctrl+click on a link opens it, even when the app reports the mouse.
+      # A directory (a file:// link to one, or a path in the text) opens in
+      # a new tab instead.
       let (c, r) = app.cellAt(e.x, e.y)
       let link = app.linkAt(c, r)
       if link.len > 0 and not link.startsWith("-"):
         app.ownButtons.incl e.button
-        openExternal(link)
+        let dir = fileUrlPath(link)
+        if dir.len > 0 and dirExists(dir): app.addTab(dir = dir)
+        else: openExternal(link)
+        return
+      let path = app.pathAt(c, r)
+      if path.len > 0:
+        app.ownButtons.incl e.button
+        app.openPath(path)
         return
   if not down and e.button in app.ownButtons:
     app.ownButtons.excl e.button
