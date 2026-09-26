@@ -17,7 +17,7 @@ Usage: ghostnim [options] [-e command [args...]]
 
 Options:
   -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
-  -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
+  -f, --font NAME|PATH   font family (fontconfig) or font file   [JetBrains Mono]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]

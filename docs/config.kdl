@@ -22,9 +22,10 @@
 // --- Font ------------------------------------------------------------------
 
 // Font family, looked up through fontconfig, or a path to a .ttf/.otf file.
-// For a family, its bold and italic faces are found too. Default: "monospace".
+// For a family, its bold and italic faces are found too. Default: "JetBrains
+// Mono", or fontconfig's "monospace" if JetBrains Mono isn't installed.
 // Command line: -f, --font.
-font "monospace"
+font "JetBrains Mono"
 
 // Font size in points. Ctrl+= and Ctrl+- zoom, and Ctrl+0 goes back to this.
 // Default: 14. Command line: -s, --size.

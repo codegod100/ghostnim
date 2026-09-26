@@ -6,13 +6,14 @@
 # ghostnim-<version>-<arch>.AppImage into the repository root. Bundled:
 #   - shared libraries (SDL2, SDL2_ttf, freetype, ...; SDL3 for sdl2-compat)
 #   - fc-match and fc-list, which ghostnim runs to find fonts
-#   - DejaVu Sans Mono (default font) and Symbols Nerd Font (icon fallback),
-#     plus a fontconfig config that adds them to the host's fonts
+#   - JetBrains Mono (default font), DejaVu Sans Mono (fallback) and Symbols
+#     Nerd Font (icon fallback), plus a fontconfig config that adds them to
+#     the host's fonts
 #   - the icon, as SVG and a 256x256 PNG rendered from it
 #     (scripts/build-icons.sh, which also renders the embedded window icon)
 #
-# Requirements: SDL2 + SDL2_ttf, fontconfig (fc-match/fc-list), curl, tar with
-# bzip2/xz support; Zig 0.16 if libghostty-vt isn't built yet; rsvg-convert
+# Requirements: SDL2 + SDL2_ttf, fontconfig (fc-match/fc-list), curl, unzip, tar
+# with bzip2/xz support; Zig 0.16 if libghostty-vt isn't built yet; rsvg-convert
 # and ImageMagick if packaging/ghostnim.svg has changed.
 #
 # Environment:
@@ -23,7 +24,8 @@
 #   LDAI_UPDATE_INFORMATION   update information to embed; linuxdeploy then
 #                 also writes <OUTPUT>.zsync (see .github/workflows/appimage.yml)
 #   SKIP_BUILD=1  package the existing ./ghostnim instead of rebuilding
-#   DEJAVU_VERSION, NERD_FONTS_VERSION   bundled font releases
+#   JETBRAINS_MONO_VERSION, DEJAVU_VERSION, NERD_FONTS_VERSION
+#                 bundled font releases
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,6 +35,7 @@ TOOLS="$BUILD/tools"
 ARCH=$(uname -m)
 VERSION=${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/ghostnim.nimble")}
 OUTPUT=${OUTPUT:-ghostnim-$VERSION-$ARCH.AppImage}
+JETBRAINS_MONO_VERSION=${JETBRAINS_MONO_VERSION:-2.304}
 DEJAVU_VERSION=${DEJAVU_VERSION:-2.37}
 NERD_FONTS_VERSION=${NERD_FONTS_VERSION:-3.4.0}
 
@@ -79,10 +82,15 @@ fetch_font() { # name url
   echo "fetching $1"
   curl -fL --retry 3 -o "$TOOLS/$1.archive" "$2"
   rm -rf "$TOOLS/$1.part" && mkdir "$TOOLS/$1.part"
-  tar -xf "$TOOLS/$1.archive" -C "$TOOLS/$1.part"
+  case "$2" in
+    *.zip) unzip -q "$TOOLS/$1.archive" -d "$TOOLS/$1.part" ;;
+    *) tar -xf "$TOOLS/$1.archive" -C "$TOOLS/$1.part" ;;
+  esac
   rm "$TOOLS/$1.archive"
   mv "$TOOLS/$1.part" "$TOOLS/$1"
 }
+fetch_font "jetbrains-mono-$JETBRAINS_MONO_VERSION" \
+  "https://github.com/JetBrains/JetBrainsMono/releases/download/v$JETBRAINS_MONO_VERSION/JetBrainsMono-$JETBRAINS_MONO_VERSION.zip"
 fetch_font "dejavu-$DEJAVU_VERSION" \
   "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_$(echo "$DEJAVU_VERSION" | tr . _)/dejavu-fonts-ttf-$DEJAVU_VERSION.tar.bz2"
 fetch_font "nerd-fonts-symbols-$NERD_FONTS_VERSION" \
@@ -104,8 +112,12 @@ fi
 
 rm -rf "$APPDIR"
 share="$APPDIR/usr/share/ghostnim"
-mkdir -p "$share/fonts/dejavu" "$share/fonts/nerd-fonts-symbols"
+mkdir -p "$share/fonts/jetbrains-mono" "$share/fonts/dejavu" "$share/fonts/nerd-fonts-symbols"
 cp "$ROOT/packaging/fonts.conf" "$share/fonts.conf"
+jbmono="$TOOLS/jetbrains-mono-$JETBRAINS_MONO_VERSION"
+cp "$jbmono"/fonts/ttf/JetBrainsMono-Regular.ttf "$jbmono"/fonts/ttf/JetBrainsMono-Bold.ttf \
+   "$jbmono"/fonts/ttf/JetBrainsMono-Italic.ttf "$jbmono"/fonts/ttf/JetBrainsMono-BoldItalic.ttf \
+   "$jbmono/OFL.txt" "$share/fonts/jetbrains-mono/"
 dejavu="$TOOLS/dejavu-$DEJAVU_VERSION/dejavu-fonts-ttf-$DEJAVU_VERSION"
 cp "$dejavu"/ttf/DejaVuSansMono*.ttf "$dejavu/LICENSE" "$share/fonts/dejavu/"
 nerd="$TOOLS/nerd-fonts-symbols-$NERD_FONTS_VERSION"

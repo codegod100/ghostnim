@@ -57,7 +57,7 @@ the event loop.
 On Debian/Ubuntu:
 
 ```sh
-sudo apt install nim libsdl2-dev libsdl2-ttf-dev fontconfig fonts-dejavu-core
+sudo apt install nim libsdl2-dev libsdl2-ttf-dev fontconfig fonts-jetbrains-mono fonts-dejavu-core
 # Zig 0.16: https://ziglang.org/download/ (or `pip install ziglang==0.16.0`)
 ```
 
@@ -94,8 +94,9 @@ This builds a release binary and packages it with
 into `build/tools` on first use. The result is
 `ghostnim-<version>-<arch>.AppImage` in the repository root. SDL2, SDL2_ttf
 and their dependencies are bundled. If your SDL2 is sdl2-compat (as on Arch),
-the SDL3 library it loads at runtime is bundled too. Fonts are still found
-through the host's fontconfig.
+the SDL3 library it loads at runtime is bundled too. JetBrains Mono (the
+default font), DejaVu Sans Mono and Symbols Nerd Font are bundled as well;
+other fonts are still found through the host's fontconfig.
 
 ### Prebuilt AppImage and updates
 
@@ -120,7 +121,7 @@ update it too. Locally built AppImages don't self-update unless built with
 ghostnim [options] [-e command [args...]]
 
   -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
-  -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
+  -f, --font NAME|PATH   font family (fontconfig) or font file   [JetBrains Mono]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
