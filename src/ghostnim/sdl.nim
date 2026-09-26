@@ -18,6 +18,7 @@ type
   Texture* {.importc: "SDL_Texture", header: sdlHeader, incompleteStruct.} = object
   SdlThread* {.importc: "SDL_Thread", header: sdlHeader, incompleteStruct.} = object
   Font* {.importc: "TTF_Font", header: ttfHeader, incompleteStruct.} = object
+  SdlCursor* {.importc: "SDL_Cursor", header: sdlHeader, incompleteStruct.} = object
 
   WindowPtr* = ptr SdlWindow
   RendererPtr* = ptr SdlRenderer
@@ -134,6 +135,8 @@ const
   BUTTON_MIDDLE* = 2'u8
   BUTTON_RIGHT* = 3'u8
   MOUSEWHEEL_FLIPPED* = 1'u32
+  SYSTEM_CURSOR_ARROW* = 0.cint   ## SDL_SystemCursor
+  SYSTEM_CURSOR_HAND* = 11.cint
 
   # Keymods
   KMOD_LSHIFT* = 0x0001'u16
@@ -212,6 +215,9 @@ proc registerEvents*(n: cint): uint32 {.sdl, importc: "SDL_RegisterEvents".}
 proc startTextInput*() {.sdl, importc: "SDL_StartTextInput".}
 proc getMouseState*(x, y: ptr cint): uint32 {.sdl, importc: "SDL_GetMouseState".}
 proc getModState*(): uint16 {.sdl, importc: "SDL_GetModState".}
+proc createSystemCursor*(id: cint): ptr SdlCursor {.sdl, importc: "SDL_CreateSystemCursor".}
+proc setCursor*(c: ptr SdlCursor) {.sdl, importc: "SDL_SetCursor".}
+proc freeCursor*(c: ptr SdlCursor) {.sdl, importc: "SDL_FreeCursor".}
 proc getTicks*(): uint32 {.sdl, importc: "SDL_GetTicks".}
 
 proc setClipboardText*(text: cstring): cint {.sdl, importc: "SDL_SetClipboardText".}

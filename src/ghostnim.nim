@@ -5,7 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils, options]
-import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links]
 
 const
   version = "0.1.0"
@@ -39,6 +39,8 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font (also Ctrl++)
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
   Ctrl+Shift+,                  reload the config file (also automatic on save)
+
+Ctrl+click a link (an OSC 8 hyperlink or a URL in the text) to open it.
 
 Right-click opens a menu with copy, paste, select all, zoom and Open Config
 (hold Shift to open it when the application has mouse reporting on).
@@ -119,10 +121,13 @@ type
     selecting: bool
     selAnchor: (int, int)
     mouseButtons: set[uint8]
-    ## Buttons pressed over the tab bar; their release is ours too.
-    barButtons: set[uint8]
+    ## Buttons whose press we handled ourselves (tab bar, Ctrl+click on a
+    ## link); their release is ours too, not the terminal's.
+    ownButtons: set[uint8]
     lastMouseCell: (int, int)
     menu: ContextMenu
+    arrowCursor, handCursor: ptr SdlCursor
+    overLink: bool             ## the pointer shows the hand for a link
 
 proc cur(app: App): Tab {.inline.} = app.tabs[app.active]
 
@@ -525,6 +530,14 @@ proc reloadConfig(app: App) =
   app.needsFull = true
   stderr.writeLine "ghostnim: reloaded " & configFile(app.cli.configPath)
 
+proc openExternal(target: string) =
+  ## Hand a file or URL to the desktop (xdg-open, or open on macOS).
+  let opener = when defined(macosx): "open" else: "xdg-open"
+  if findExe(opener).len == 0:
+    stderr.writeLine "ghostnim: can't open " & target & ": " & opener & " not found"
+    return
+  discard execShellCmd(opener & " " & quoteShell(target) & " >/dev/null 2>&1 &")
+
 proc openConfig(app: App) =
   ## Open the config file for editing, creating it from the commented
   ## defaults first if needed. $VISUAL or $EDITOR runs in a new tab;
@@ -536,7 +549,7 @@ proc openConfig(app: App) =
     # Through sh so an $EDITOR with arguments ("code --wait") works.
     app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path])
   elif findExe("xdg-open").len > 0:
-    discard execShellCmd("xdg-open " & quoteShell(path) & " >/dev/null 2>&1 &")
+    openExternal(path)
   else:
     app.addTab(@["vi", path])
 
@@ -685,6 +698,76 @@ proc cellAt(app: App, x, y: int32): (int, int) =
 proc inTabBar(app: App, y: int32): bool =
   float(y) * app.rd.scale < app.rd.top.float
 
+proc cellText(r: var GhosttyGridRef): string =
+  ## The cell's text for link detection: " " when blank, "" for the right
+  ## half of a wide character.
+  var cell: GhosttyCell
+  var wide: cint
+  if ghostty_grid_ref_cell(addr r, addr cell) == GHOSTTY_SUCCESS and
+     ghostty_cell_get(cell, GHOSTTY_CELL_DATA_WIDE, addr wide) == GHOSTTY_SUCCESS and
+     wide == GHOSTTY_CELL_WIDE_SPACER_TAIL:
+    return ""
+  var cps: array[16, uint32]
+  var n: csize_t
+  if ghostty_grid_ref_graphemes(addr r, addr cps[0], csize_t(cps.len), addr n) != GHOSTTY_SUCCESS or
+     n == 0:
+    return " "
+  for i in 0 ..< n.int: result.add codepointToUtf8(cps[i])
+
+proc rowWraps(app: App, row: int): bool =
+  ## Whether viewport row `row` soft-wraps onto the next one.
+  var (ok, r) = app.gridRef(0, row)
+  var gr: GhosttyRow
+  var wraps: bool
+  ok and ghostty_grid_ref_row(addr r, addr gr) == GHOSTTY_SUCCESS and
+    ghostty_row_get(gr, GHOSTTY_ROW_DATA_WRAP, addr wraps) == GHOSTTY_SUCCESS and wraps
+
+proc linkAt(app: App, col, row: int): string =
+  ## The link under viewport cell (col, row): its OSC 8 hyperlink if it has
+  ## one, else a URL found in the text of its (soft-wrapped) line.
+  var (ok, r) = app.gridRef(col, row)
+  if not ok: return ""
+  var n: csize_t
+  if ghostty_grid_ref_hyperlink_uri(addr r, nil, 0, addr n) == GHOSTTY_OUT_OF_SPACE and n > 0:
+    result = newString(n.int)
+    if ghostty_grid_ref_hyperlink_uri(addr r, cast[ptr uint8](addr result[0]), n,
+                                      addr n) != GHOSTTY_SUCCESS:
+      result = ""
+    else:
+      result.setLen(n.int)
+    return
+  var cols, rows: uint16
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+  var first = row
+  while first > 0 and app.rowWraps(first - 1): dec first
+  var last = row
+  while last < rows.int - 1 and app.rowWraps(last): inc last
+  var cells: seq[string]
+  for y in first .. last:
+    for x in 0 ..< cols.int:
+      var (okc, rc) = app.gridRef(x, y)
+      cells.add(if okc: cellText(rc) else: " ")
+  result = urlAt(cells, (row - first) * cols.int + col)
+
+proc linkModifier(): bool =
+  ## Ctrl (or Cmd/Super) held: clicks open links.
+  (getModState() and (KMOD_CTRL or KMOD_GUI)) != 0
+
+proc updateLinkCursor(app: App) =
+  ## Show a hand while Ctrl is held over a link.
+  if app.tabs.len == 0: return   # the last tab just closed
+  var x, y: cint
+  discard getMouseState(addr x, addr y)
+  var over = linkModifier() and not app.menu.open and not app.selecting and
+             app.ownButtons.len == 0 and not app.inTabBar(y)
+  if over:
+    let (c, r) = app.cellAt(x, y)
+    over = app.linkAt(c, r).len > 0
+  if over != app.overLink:
+    app.overLink = over
+    setCursor(if over: app.handCursor else: app.arrowCursor)
+
 proc onTabBarClick(app: App, button: uint8, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let hit = app.rd.hitTabBar(app.tabs.len, px.int, py.int)
@@ -759,12 +842,21 @@ proc menuMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     app.runMenuAction(app.menu.release(app.rd, x, y))
 
 proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
-  if down and not app.menu.open and app.inTabBar(e.y) and app.mouseButtons.len == 0:
-    app.barButtons.incl e.button
-    app.onTabBarClick(e.button, e.x, e.y)
-    return
-  if not down and e.button in app.barButtons:
-    app.barButtons.excl e.button
+  if down and not app.menu.open and app.mouseButtons.len == 0:
+    if app.inTabBar(e.y):
+      app.ownButtons.incl e.button
+      app.onTabBarClick(e.button, e.x, e.y)
+      return
+    if e.button == BUTTON_LEFT and linkModifier():
+      # Ctrl+click on a link opens it, even when the app reports the mouse.
+      let (c, r) = app.cellAt(e.x, e.y)
+      let link = app.linkAt(c, r)
+      if link.len > 0 and not link.startsWith("-"):
+        app.ownButtons.incl e.button
+        openExternal(link)
+        return
+  if not down and e.button in app.ownButtons:
+    app.ownButtons.excl e.button
     return
   if down: app.mouseButtons.incl e.button else: app.mouseButtons.excl e.button
   if app.menu.open:
@@ -787,6 +879,7 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     app.openMenu(e.x, e.y)
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
+  app.updateLinkCursor()
   if app.menu.open:
     let (px, py) = app.pixelPos(e.x, e.y)
     app.menu.motion(app.rd, int(px), int(py))
@@ -833,8 +926,10 @@ proc handleEvent(app: App, e: var Event) =
     app.running = false
   elif t == EV_KEYDOWN:
     app.onKeyDown(e.key)
+    app.updateLinkCursor()      # Ctrl pressed over a link
   elif t == EV_KEYUP:
     app.onKeyUp(e.key)
+    app.updateLinkCursor()
   elif t == EV_TEXTINPUT:
     app.onTextInput(e.text)
   elif t == EV_MOUSEBUTTONDOWN:
@@ -845,6 +940,7 @@ proc handleEvent(app: App, e: var Event) =
     app.onMouseMotion(e.motion)
   elif t == EV_MOUSEWHEEL:
     app.onMouseWheel(e.wheel)
+    app.updateLinkCursor()      # other text under the pointer now
   elif t == EV_WINDOW:
     case e.window.event
     of WINDOWEVENT_SIZE_CHANGED:
@@ -942,6 +1038,8 @@ proc main() =
   app.applySize()
   app.updateWindowTitle()
   startTextInput()
+  app.arrowCursor = createSystemCursor(SYSTEM_CURSOR_ARROW)
+  app.handCursor = createSystemCursor(SYSTEM_CURSOR_HAND)
 
   let startTicks = getTicks()
   var lastBlink = getTicks()
@@ -974,6 +1072,8 @@ proc main() =
   ghostty_mouse_encoder_free(app.mouseEncoder)
   ghostty_key_event_free(app.keyEvent)
   ghostty_key_encoder_free(app.keyEncoder)
+  freeCursor(app.handCursor)
+  freeCursor(app.arrowCursor)
   app.rd.destroy()
   destroyRenderer(r)
   destroyWindow(app.window)

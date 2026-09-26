@@ -32,6 +32,11 @@ the event loop.
   SGR and more). Hold Shift to select instead.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
   with bracketed paste.
+- Ctrl+click opens links with `xdg-open`: OSC 8 hyperlinks, and URLs in the
+  text (`https://`, `http://`, `file://`, `mailto:`, `www.` and a few more),
+  even when they wrap onto the next line. The pointer turns into a hand over
+  a link while Ctrl is held. It works when the application has mouse
+  reporting on, too.
 - Right-click context menu with Copy, Paste, Select All, zoom and Open
   Config, drawn in-window and navigable with the arrow keys and Enter. When
   the application has mouse reporting on, hold Shift to open it.
