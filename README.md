@@ -72,6 +72,20 @@ ghostnim links libghostty-vt statically by default. Set `GHOSTTY_VT_SHARED=1`
 to link the shared library instead (needed if you built libghostty with
 `SIMD=true`).
 
+### AppImage
+
+```sh
+nimble appimage      # or: sh scripts/build-appimage.sh
+```
+
+This builds a release binary and packages it with
+[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy), which is downloaded
+into `build/tools` on first use. The result is
+`ghostnim-<version>-<arch>.AppImage` in the repository root. SDL2, SDL2_ttf
+and their dependencies are bundled. If your SDL2 is sdl2-compat (as on Arch),
+the SDL3 library it loads at runtime is bundled too. Fonts are still found
+through the host's fontconfig.
+
 ## Usage
 
 ```

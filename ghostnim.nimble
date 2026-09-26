@@ -13,3 +13,6 @@ requires "nim >= 1.6.0"
 
 task vt, "Fetch and build libghostty-vt into ./vendor/ghostty-vt":
   exec "sh scripts/build-libghostty-vt.sh"
+
+task appimage, "Build a release ghostnim-<version>-<arch>.AppImage":
+  exec "sh scripts/build-appimage.sh"

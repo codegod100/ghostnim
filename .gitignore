@@ -2,3 +2,5 @@
 /ghostnim
 /nimcache/
 *.o
+/build/
+*.AppImage
