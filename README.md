@@ -63,7 +63,8 @@ the event loop.
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Recent folders: a strip under the tabs shows the directories you've been in,
   most visited first (ties go to the most recent), as many as fit. The list
-  is shared by all tabs and leaves out the current tab's own directory.
+  is shared by all tabs and windows and leaves out the current tab's own
+  directory.
   Click one to `cd` there, or
   middle-click it to open it in a new tab; if a program is running in the
   tab, a click opens a new tab too. Turn the strip on or off from the

@@ -5,6 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils, options, algorithm]
+from std/times import epochTime, `==`
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
                 wordsel, paths, filepane]
 
@@ -101,7 +102,7 @@ type
   RecentDir = object
     path: string
     visits: int               ## times a tab has gone there
-    lastVisit: int            ## app.dirVisits at the latest one
+    lastVisit: int64          ## when the latest was, in Unix milliseconds
 
   SelectUnit = enum
     ## What a selection drag grows by: cells, or (after a double or triple
@@ -136,7 +137,9 @@ type
     tabs: seq[Tab]
     active: int
     dirs: seq[RecentDir]       ## folders any tab has been in, most used first
-    dirVisits: int             ## visits counted so far, to order ties by recency
+    newVisits: seq[tuple[path: string, at: int64]]  ## not yet in the shared file
+    goneDirs: seq[string]      ## folders found missing, to drop from it
+    dirsStamp: times.Time      ## the shared file's mtime when last read
     nextId: int32
     keyEncoder: GhosttyKeyEncoder
     keyEvent: GhosttyKeyEvent
@@ -659,67 +662,89 @@ proc folderBarHiddenFlag(): string = stateDir() / "folder-bar-hidden"
   ## Exists while the recent-folders strip is turned off.
 
 proc recentDirsFile(): string = stateDir() / "recent-folders"
-  ## One folder per line, most used first: "VISITS LAST-VISIT PATH".
+  ## Shared by all ghostnim windows. One folder per line, most used first:
+  ## "VISITS LAST-VISIT-MS PATH".
 
-proc loadRecentDirs(app: App) =
+proc readRecentDirs(): seq[RecentDir] =
   try:
     for line in readFile(recentDirsFile()).splitLines:
       let parts = line.split(' ', maxsplit = 2)
       if parts.len < 3 or not parts[2].isAbsolute: continue
-      let d = RecentDir(path: parts[2], visits: parseInt(parts[0]),
-                        lastVisit: parseInt(parts[1]))
-      app.dirs.add d
-      app.dirVisits = max(app.dirVisits, d.lastVisit)
+      result.add RecentDir(path: parts[2], visits: parseInt(parts[0]),
+                           lastVisit: parseBiggestInt(parts[1]))
   except IOError, OSError, ValueError:
     discard
 
-proc saveRecentDirs(app: App) =
-  var text = ""
-  for d in app.dirs:
-    text.add $d.visits & " " & $d.lastVisit & " " & d.path & "\n"
-  try:
-    createDir(stateDir())
-    writeFile(recentDirsFile(), text)
-  except OSError, IOError:
-    stderr.writeLine "ghostnim: can't save the recent folders: " &
-                     getCurrentExceptionMsg().splitLines[0]
+proc sortAndTrim(dirs: var seq[RecentDir]) =
+  dirs.sort(proc (a, b: RecentDir): int =
+    result = cmp(b.visits, a.visits)
+    if result == 0: result = cmp(b.lastVisit, a.lastVisit))
+  if dirs.len > keptRecentDirs:
+    # Make room by dropping the least recently visited, not the least used,
+    # so new folders get a chance to build up visits.
+    var byAge = dirs
+    byAge.sort(proc (a, b: RecentDir): int = cmp(b.lastVisit, a.lastVisit))
+    let cutoff = byAge[keptRecentDirs - 1].lastVisit
+    dirs.keepItIf(it.lastVisit >= cutoff)
 
-proc findDir(app: App, dir: string): int =
-  for i, d in app.dirs:
-    if d.path == dir: return i
-  -1
+proc recentDirsStamp(): times.Time =
+  try: getLastModificationTime(recentDirsFile()) except OSError: times.Time()
+
+proc syncRecentDirs(app: App) =
+  ## Merge this window's new visits (and folders found gone) into the shared
+  ## file, and pick up what other windows added to it.
+  let pending = app.newVisits.len > 0 or app.goneDirs.len > 0
+  if not pending and recentDirsStamp() == app.dirsStamp: return
+  var lock: cint = -1
+  if pending:
+    try:
+      createDir(stateDir())
+      lock = posix.open(cstring(recentDirsFile() & ".lock"), O_RDWR or O_CREAT, 0o644)
+      if lock >= 0: discard lockf(lock, F_LOCK, 0)
+    except OSError:
+      discard
+  var dirs = readRecentDirs()
+  for v in app.newVisits:
+    block found:
+      for d in dirs.mitems:
+        if d.path == v.path:
+          inc d.visits
+          d.lastVisit = max(d.lastVisit, v.at)
+          break found
+      dirs.add RecentDir(path: v.path, visits: 1, lastVisit: v.at)
+  for gone in app.goneDirs:
+    dirs.keepItIf(it.path != gone)
+  dirs.sortAndTrim()
+  if pending:
+    app.newVisits.setLen(0)
+    app.goneDirs.setLen(0)
+    var text = ""
+    for d in dirs:
+      text.add $d.visits & " " & $d.lastVisit & " " & d.path & "\n"
+    let tmp = recentDirsFile() & "." & $getpid()
+    try:
+      writeFile(tmp, text)
+      moveFile(tmp, recentDirsFile())
+    except OSError, IOError:
+      stderr.writeLine "ghostnim: can't save the recent folders: " &
+                       getCurrentExceptionMsg().splitLines[0]
+    if lock >= 0: discard posix.close(lock)
+  app.dirsStamp = recentDirsStamp()
+  app.dirs = dirs
 
 proc trackDirs(app: App) =
   ## Note each tab's working directory (a few times a second at most),
-  ## counting a visit whenever one moves, in the list all tabs share.
+  ## counting a visit whenever one moves, in the list all tabs and windows
+  ## share.
   let now = getTicks()
   if now - app.dirsChecked < 250: return
   app.dirsChecked = now
-  var changed = false
   for tab in app.tabs:
     let dir = tab.pty.cwd
     if dir.len == 0 or dir == tab.lastDir: continue
     tab.lastDir = dir
-    inc app.dirVisits
-    let i = app.findDir(dir)
-    if i >= 0:
-      inc app.dirs[i].visits
-      app.dirs[i].lastVisit = app.dirVisits
-    else:
-      app.dirs.add RecentDir(path: dir, visits: 1, lastVisit: app.dirVisits)
-    changed = true
-  if not changed: return
-  app.dirs.sort(proc (a, b: RecentDir): int =
-    result = cmp(b.visits, a.visits)
-    if result == 0: result = cmp(b.lastVisit, a.lastVisit))
-  if app.dirs.len > keptRecentDirs:
-    # Make room by dropping the least recently visited, not the least used,
-    # so new folders get a chance to build up visits.
-    var byAge = app.dirs
-    byAge.sort(proc (a, b: RecentDir): int = cmp(b.lastVisit, a.lastVisit))
-    let cutoff = byAge[keptRecentDirs - 1].lastVisit
-    app.dirs.keepItIf(it.lastVisit >= cutoff)
-  app.saveRecentDirs()
+    app.newVisits.add (dir, int64(epochTime() * 1000))
+  app.syncRecentDirs()
 
 proc recentDirs(app: App): seq[string] =
   ## The most used folders, not counting the one the current tab is in.
@@ -739,10 +764,8 @@ proc goToDir(app: App, dir: string, newTab = false) =
   ## cd the current tab's shell into `dir`, or, if a program is running in
   ## it (or `newTab`), open a new tab there.
   if not dirExists(dir):
-    let i = app.findDir(dir)
-    if i >= 0:
-      app.dirs.delete(i)
-      app.saveRecentDirs()
+    app.goneDirs.add dir
+    app.syncRecentDirs()
     return
   if newTab or not app.cur.pty.atPrompt:
     app.addTab(dir = dir)
@@ -1557,7 +1580,7 @@ proc main() =
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
   app.applySelectionColors()
   app.rd.setFolderBar(not fileExists(folderBarHiddenFlag()))
-  app.loadRecentDirs()
+  app.syncRecentDirs()
   let paneW = if app.paneOn: max(12 * app.rd.cellW, int(app.paneW.float * scale + 0.5)) else: 0
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad + paneW).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
