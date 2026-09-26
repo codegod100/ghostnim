@@ -5,7 +5,7 @@
 ## them into a persistent grid texture. Only rows libghostty marks dirty are
 ## redrawn; the cursor is composited on top every frame.
 
-import std/[tables, osproc, strutils, os]
+import std/[tables, osproc, strutils, os, strtabs]
 import vt, sdl, boxdraw
 
 type
@@ -56,10 +56,33 @@ proc check(res: GhosttyResult, what: string) =
   if res != GHOSTTY_SUCCESS:
     raise newException(CatchableError, what & " failed: " & $res)
 
+# The AppImage bundles fc-match/fc-list next to the binary, plus fonts and a
+# fontconfig config (system config + the bundled font dir) under share/.
+proc bundledShare(): string = getAppDir() / ".." / "share" / "ghostnim"
+
+proc bundledFonts(): seq[string] =
+  ## Font files shipped in the AppImage (empty for a normal build).
+  let dir = bundledShare() / "fonts"
+  if dirExists(dir):
+    for f in walkDirRec(dir):
+      if f.endsWith(".ttf") or f.endsWith(".otf"): result.add f
+
+proc fcRun(tool, args: string): tuple[output: string, exitCode: int] =
+  ## Run a fontconfig tool, preferring the bundled one and bundled config.
+  let bundled = getAppDir() / tool
+  let exe = if fileExists(bundled): quoteShell(bundled) else: tool
+  var env: StringTableRef = nil
+  let conf = bundledShare() / "fonts.conf"
+  if fileExists(conf) and not existsEnv("FONTCONFIG_FILE"):
+    env = newStringTable()
+    for k, v in envPairs(): env[k] = v
+    env["FONTCONFIG_FILE"] = conf
+  execCmdEx(exe & " " & args, {poStdErrToStdOut, poUsePath}, env)
+
 proc fcMatch(pattern: string): string =
   ## Ask fontconfig for the best font file matching `pattern`.
   try:
-    let (output, code) = execCmdEx("fc-match -f '%{file}' " & quoteShell(pattern))
+    let (output, code) = fcRun("fc-match", "-f '%{file}' " & quoteShell(pattern))
     if code == 0 and fileExists(output.strip): result = output.strip
   except OSError:
     discard
@@ -67,7 +90,7 @@ proc fcMatch(pattern: string): string =
 proc fcList(pattern: string): seq[string] =
   ## Font files matching `pattern`, monospace ones first.
   try:
-    let (output, code) = execCmdEx("fc-list -f '%{spacing}\\t%{file}\\n' " & quoteShell(pattern))
+    let (output, code) = fcRun("fc-list", "-f '%{spacing}\\t%{file}\\n' " & quoteShell(pattern))
     if code != 0: return
     var mono: seq[string]
     for line in output.splitLines:
@@ -93,7 +116,8 @@ proc resolveFonts*(primary: string): array[Face, string] =
   if result[faceRegular].len == 0:
     for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
               "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-              "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"]:
+              "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+              bundledShare() / "fonts" / "dejavu" / "DejaVuSansMono.ttf"]:
       if fileExists(p):
         result[faceRegular] = p
         break
@@ -207,7 +231,13 @@ proc fontFor(rd: Renderer, face: Face, text: string): FontPtr =
   let charset = toHex(cp.int, if cp > 0xFFFF: 6 else: 4).toLowerAscii
   # fc-match always returns *some* font, even one lacking the glyph, so fall
   # back to every font fontconfig says covers it.
-  for file in @[fcMatch("monospace:charset=" & charset)] & fcList(":charset=" & charset):
+  var candidates = @[fcMatch("monospace:charset=" & charset)] & fcList(":charset=" & charset)
+  # Private Use Area glyphs mean whatever each font says, and prompts expect
+  # Nerd Font icons there, so prefer the bundled Nerd Font for them. Otherwise
+  # bundled fonts come last, for hosts where fontconfig is missing or broken.
+  let pua = cp in 0xE000'u32 .. 0xF8FF'u32 or cp >= 0xF0000'u32
+  candidates = if pua: bundledFonts() & candidates else: candidates & bundledFonts()
+  for file in candidates:
     if file.len == 0 or file == rd.fontPaths[faceRegular]: continue
     if file notin rd.fallbackByFile:
       rd.fallbackByFile[file] = openFont(file.cstring, cint(float(rd.fontSize) * rd.scale + 0.5))
