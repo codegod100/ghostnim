@@ -9,7 +9,7 @@ type
   MenuAction* = enum
     maNone,       ## separators
     maCopy, maPaste, maSelectAll, maZoomIn, maZoomOut, maZoomReset, maOpenConfig,
-    maToggleFolderBar, maToggleFilePane, maToggleHiddenFiles
+    maToggleFolderBar, maToggleFilePane, maToggleHiddenFiles, maFilterFiles
 
   MenuItem* = object
     label*, shortcut*: string

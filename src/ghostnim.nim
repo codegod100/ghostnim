@@ -5,6 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix, sequtils, options]
+from std/unicode import runeLen, runeSubStr
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
                 wordsel, paths, filepane]
 
@@ -756,6 +757,7 @@ proc focusPane(app: App, on: bool) =
   if on == app.paneFocused: return
   app.paneFocused = on
   app.typeAhead = ""
+  app.pane.filtering = false    # the filter stays, but typing no longer edits it
   app.rd.focused = app.windowFocused and not on
   app.needsFull = true
 
@@ -812,15 +814,39 @@ proc paneUp(app: App) =
   app.paneOpenDir(app.pane.dir.parentDir)
   app.pane.selectName(came, app.paneRows)
 
+proc paneFilter(app: App, filter: string) =
+  ## Show only the entries whose names contain `filter`.
+  app.pane.setFilter(filter)
+  if app.pane.selected >= 0: app.pane.select(app.pane.selected, app.paneRows)
+
 proc paneKey(app: App, e: KeyboardEvent) =
   ## Keyboard handling while the file pane has focus; nothing reaches the
-  ## terminal. Printable keys come back through SDL_TEXTINPUT as type-ahead.
+  ## terminal. Printable keys come back through SDL_TEXTINPUT as type-ahead,
+  ## or into the filter while it's being typed.
   app.hasPendingKey = false
   app.suppressText = false
   let rows = app.paneRows
   let shift = (e.keysym.`mod` and KMOD_SHIFT) != 0
+  let ctrl = (e.keysym.`mod` and KMOD_CTRL) != 0
   let sel = app.pane.selected
-  case toGhosttyKey(e.keysym.scancode)
+  let key = toGhosttyKey(e.keysym.scancode)
+  if app.pane.filtering:
+    case key
+    of gkBackspace:
+      # Delete the last character; on an empty filter, stop filtering.
+      if app.pane.filter.len == 0: app.pane.filtering = false
+      else: app.paneFilter(app.pane.filter.runeSubStr(0, app.pane.filter.runeLen - 1))
+      return
+    of gkEscape:
+      app.pane.filtering = false
+      app.paneFilter("")
+      return
+    of gkEnter, gkNumpadEnter:
+      app.pane.filtering = false   # then open the selected entry, as below
+    of gkArrowLeft, gkArrowRight:
+      return                       # don't leave the folder while typing
+    else: discard
+  case key
   of gkArrowDown: app.pane.select(sel + 1, rows)
   of gkArrowUp: app.pane.select(if sel < 0: 0 else: sel - 1, rows)
   of gkPageDown: app.pane.select(sel + max(1, rows - 1), rows)
@@ -837,15 +863,28 @@ proc paneKey(app: App, e: KeyboardEvent) =
   of gkArrowRight:
     if sel >= 0 and app.pane.entries[sel].isDir: app.paneOpen()
   of gkArrowLeft, gkBackspace: app.paneUp()
-  of gkEscape: app.focusPane(false)
+  of gkEscape:
+    if app.pane.filter.len > 0: app.paneFilter("")   # clear the filter first
+    else: app.focusPane(false)
   of gkH:
-    if (e.keysym.`mod` and KMOD_CTRL) == 0: return   # type-ahead
+    if not ctrl: return            # type-ahead
     app.toggleHiddenFiles()
+  of gkF:
+    if not ctrl: return            # type-ahead
+    app.pane.filtering = true
   else: return
   app.typeAhead = ""
 
 proc paneTypeAhead(app: App, text: string) =
-  ## Letters typed into the focused pane select the entry they start.
+  ## Letters typed into the focused pane select the entry they start, or go
+  ## into the filter while it's being typed; "/" starts typing one.
+  if app.pane.filtering:
+    app.paneFilter(app.pane.filter & text)
+    return
+  if text == "/":
+    app.pane.filtering = true
+    app.typeAhead = ""
+    return
   if text.strip.len == 0: return
   let now = getTicks()
   if now - app.typeAheadAt > 1000: app.typeAhead = ""
@@ -895,6 +934,9 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maToggleFolderBar: app.toggleFolderBar()
   of maToggleFilePane: app.toggleFilePane()
   of maToggleHiddenFiles: app.toggleHiddenFiles()
+  of maFilterFiles:
+    app.focusPane(true)
+    app.pane.filtering = true
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -1246,6 +1288,7 @@ proc openMenu(app: App, x, y: int32) =
     let hiddenKey = kb.shortcutLabel(acToggleHiddenFiles)
     paneItems.add item(if app.pane.showHidden: "Hide Hidden Files" else: "Show Hidden Files",
                        maToggleHiddenFiles, if hiddenKey.len > 0: hiddenKey else: "Ctrl+H")
+    paneItems.add item("Filter Files", maFilterFiles, "Ctrl+F")
   app.menu.show(app.rd, @[
     item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
     item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
