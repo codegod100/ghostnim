@@ -164,7 +164,8 @@ type
                                      data: ptr uint8, len: csize_t) {.cdecl.}
   GhosttyTerminalCallbackFn* = proc (t: GhosttyTerminal, userdata: pointer) {.cdecl.}
 
-include keys
+import keys
+export keys
 
 const
   # GhosttyResult
@@ -189,6 +190,7 @@ const
   GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND* = 11.cint
   GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND* = 12.cint
   GHOSTTY_TERMINAL_OPT_COLOR_CURSOR* = 13.cint
+  GHOSTTY_TERMINAL_OPT_COLOR_PALETTE* = 14.cint
   GHOSTTY_TERMINAL_OPT_SELECTION* = 21.cint
   GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES* = 28.cint
 
@@ -197,6 +199,7 @@ const
   GHOSTTY_TERMINAL_DATA_ROWS* = 2.cint
   GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING* = 11.cint
   GHOSTTY_TERMINAL_DATA_TITLE* = 12.cint
+  GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT* = 25.cint
   GHOSTTY_TERMINAL_DATA_SELECTION* = 31.cint
   GHOSTTY_TERMINAL_DATA_MODE* = 37.cint
 

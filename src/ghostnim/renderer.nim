@@ -5,7 +5,7 @@
 ## them into a persistent grid texture. Only rows libghostty marks dirty are
 ## redrawn; the cursor and the tab bar are composited on top every frame.
 
-import std/[tables, osproc, strutils, os, strtabs]
+import std/[tables, osproc, strutils, os, strtabs, options]
 from std/unicode import runes, runeLen, runeSubStr, `$`
 import vt, sdl, boxdraw
 
@@ -56,6 +56,7 @@ type
     rowIter: GhosttyRenderStateRowIterator
     rowCells: GhosttyRenderStateRowCells
     colors*: GhosttyRenderStateColors
+    selectionFg*, selectionBg*: Option[Rgb]   ## unset: swap fg and bg
     focused*: bool
 
 proc rgb*(c: GhosttyColorRgb): Rgb {.inline.} = Rgb(r: c.r, g: c.g, b: c.b)
@@ -180,6 +181,11 @@ proc newRenderer*(r: RendererPtr, fontPaths: array[Face, string], fontSize: int,
   check ghostty_render_state_row_cells_new(nil, addr result.rowCells),
     "ghostty_render_state_row_cells_new"
   result.colors = initSized(GhosttyRenderStateColors)
+
+proc setFonts*(rd: Renderer, fontPaths: array[Face, string]) =
+  rd.fontPaths = fontPaths
+  rd.clearGlyphCache()
+  rd.loadFonts()
 
 proc setFontSize*(rd: Renderer, size: int) =
   rd.fontSize = max(4, size)
@@ -340,7 +346,7 @@ proc resolvedColors(rd: Renderer, cell: CellInfo, selected: bool): (Rgb, Rgb, bo
   var bg = if cell.hasBg: cell.bg else: rgb(rd.colors.background)
   var drawBg = cell.hasBg
   if selected:
-    swap(fg, bg)
+    (fg, bg) = (rd.selectionFg.get(bg), rd.selectionBg.get(fg))
     drawBg = true
   (fg, bg, drawBg)
 

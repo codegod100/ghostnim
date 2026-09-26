@@ -4,8 +4,8 @@
 ## state, scrollback, reflow, key/mouse encoding and produces a render
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
-import std/[os, strutils, posix, sequtils]
-import ghostnim/[vt, sdl, pty, renderer, input, menu, update]
+import std/[os, strutils, posix, sequtils, options]
+import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds]
 
 const
   version = "0.1.0"
@@ -16,33 +16,53 @@ ghostnim """ & version & """ - a Nim terminal powered by libghostty-vt
 Usage: ghostnim [options] [-e command [args...]]
 
 Options:
+  -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
   -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
+  -d, --working-directory DIR  start the first tab in DIR  [current directory]
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
   -h, --help             show this help
 
-Keys:
+Keys (defaults; change them in the config file's keybinds block):
   Ctrl+Shift+T / Ctrl+Shift+W   new tab / close tab
   Ctrl+Tab / Ctrl+Shift+Tab     next / previous tab (also Ctrl+PageDown/PageUp)
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
+  Ctrl+,                        open the config file in $VISUAL/$EDITOR
+  Ctrl+Shift+,                  reload the config file (also automatic on save)
 
-Right-click opens a menu with copy, paste, select all and zoom (hold Shift
-to open it when the application has mouse reporting on).
+Right-click opens a menu with copy, paste, select all, zoom and Open Config
+(hold Shift to open it when the application has mouse reporting on).
+
+Every option except --config, --screenshot and --help can also be set in the
+config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
+`scrollback 50000`, `command "fish" "--login"`, `working-directory "~/code"`,
+plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
+  Cli = object
+    ## What the command line set. It wins over the config file, on every
+    ## reload too; empty/zero fields were not given.
+    configPath, font, workingDirectory, screenshot: string
+    size, cols, rows: int
+    scrollback: int          ## -1 when not given
+    command: seq[string]
+
   Options = object
     font: string
     size: int
     cols, rows: int
     scrollback: int
     command: seq[string]
+    workingDirectory: string
+    colors: Colors
+    keybinds: Keybinds
     screenshot: string
 
   PtyWatch = object
@@ -64,6 +84,9 @@ type
 
   App = ref object
     opts: Options
+    cli: Cli
+    configStamp: ConfigStamp   ## the config file as last loaded
+    configChecked: uint32      ## ticks of the last check for changes
     window: WindowPtr
     rd: Renderer
     tabs: seq[Tab]
@@ -176,10 +199,82 @@ proc updateWindowTitle(app: App) =
   let title = app.cur.title
   setWindowTitle(app.window, if title.len > 0: title.cstring else: "ghostnim")
 
+# --- options ----------------------------------------------------------------
+
+proc parseCli(): Cli =
+  result.scrollback = -1
+  let args = commandLineParams()
+  var i = 0
+  proc need(i: var int): string =
+    inc i
+    if i >= args.len:
+      quit("ghostnim: missing value for " & args[i - 1], 2)
+    args[i]
+  while i < args.len:
+    let a = args[i]
+    case a
+    of "-h", "--help": echo usage; quit(0)
+    of "-c", "--config": result.configPath = need(i)
+    of "-f", "--font": result.font = need(i)
+    of "-s", "--size": result.size = parseInt(need(i))
+    of "--cols": result.cols = parseInt(need(i))
+    of "--rows": result.rows = parseInt(need(i))
+    of "--scrollback": result.scrollback = parseInt(need(i))
+    of "-d", "--working-directory":
+      result.workingDirectory = expandTilde(need(i))
+      if not dirExists(result.workingDirectory):
+        quit("ghostnim: no such directory: " & result.workingDirectory, 2)
+    of "--screenshot": result.screenshot = need(i)
+    of "-e", "--exec":
+      result.command = args[i + 1 .. ^1]
+      break
+    else:
+      quit("ghostnim: unknown option " & a & "\n\n" & usage, 2)
+    inc i
+
+proc merge(cfg: Config, cli: Cli): Options =
+  ## The config file's settings with the command line's on top.
+  template pick(c, f: untyped): untyped = (if c: cli.f else: cfg.f)
+  result = Options(
+    font: pick(cli.font.len > 0, font),
+    size: pick(cli.size > 0, size),
+    cols: pick(cli.cols > 0, cols),
+    rows: pick(cli.rows > 0, rows),
+    scrollback: pick(cli.scrollback >= 0, scrollback),
+    command: pick(cli.command.len > 0, command),
+    workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
+    colors: cfg.colors, keybinds: cfg.keybinds, screenshot: cli.screenshot)
+  if result.command.len == 0: result.command = @[defaultShell()]
+
 # --- tabs -------------------------------------------------------------------
 
-proc newTab(app: App, cwd = ""): Tab =
-  ## A terminal plus a child on a pty, sized to the current window.
+proc applyColors(app: App, term: GhosttyTerminal) =
+  ## The config file's colours become the terminal's defaults, which programs
+  ## can still override with OSC 4/10/11/12. Unset ones go back to built-in.
+  let c = app.opts.colors
+  proc toVt(c: ConfigRgb): GhosttyColorRgb = GhosttyColorRgb(r: c.r, g: c.g, b: c.b)
+  for (opt, col) in [(GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, c.foreground),
+                     (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, c.background),
+                     (GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, c.cursor)]:
+    var v = toVt(col.get((0'u8, 0'u8, 0'u8)))
+    discard ghostty_terminal_set(term, opt, if col.isSome: addr v else: nil)
+  # Reset first, so PALETTE_DEFAULT is the built-in palette, not the last config's.
+  discard ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, nil)
+  if c.palette.len > 0:
+    var pal: array[256, GhosttyColorRgb]
+    discard ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, addr pal)
+    for (i, col) in c.palette: pal[i] = toVt(col)
+    discard ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, addr pal)
+
+proc applySelectionColors(app: App) =
+  template toRgb(c: Option[ConfigRgb]): Option[Rgb] =
+    (if c.isSome: some(Rgb(r: c.get.r, g: c.get.g, b: c.get.b)) else: none(Rgb))
+  app.rd.selectionFg = toRgb(app.opts.colors.selectionForeground)
+  app.rd.selectionBg = toRgb(app.opts.colors.selectionBackground)
+
+proc newTab(app: App, cwd = "", command: seq[string] = @[]): Tab =
+  ## A terminal plus a child on a pty, sized to the current window, running
+  ## `command` (default: the configured shell).
   let (w, h) = app.outputSize()
   let (cols, rows) = app.rd.gridSize(w, h)
   let tab = Tab(id: app.nextId, state: newRenderState())
@@ -195,7 +290,9 @@ proc newTab(app: App, cwd = ""): Tab =
                                cast[pointer](onWritePty))
   discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
                                cast[pointer](onTitleChanged))
-  tab.pty = spawn(app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH, cwd)
+  app.applyColors(tab.term)
+  tab.pty = spawn(if command.len > 0: command else: app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH,
+                  if cwd.len > 0: cwd else: app.opts.workingDirectory)
   tab.watch = cast[ptr PtyWatch](allocShared0(sizeof(PtyWatch)))
   tab.watch.fd = tab.pty.fd
   tab.watch.id = tab.id
@@ -220,9 +317,9 @@ proc activate(app: App, i: int) =
   app.needsFull = true
   app.updateWindowTitle()
 
-proc addTab(app: App) =
+proc addTab(app: App, command: seq[string] = @[]) =
   ## Open a tab next to the current one, in the current tab's directory.
-  let tab = app.newTab(app.cur.pty.cwd)
+  let tab = app.newTab(app.cur.pty.cwd, command)
   app.tabs.insert(tab, app.active + 1)
   app.activate(app.active + 1)
 
@@ -385,6 +482,57 @@ proc zoom(app: App, size: int) =
   app.rd.setFontSize(size)
   app.applySize()
 
+proc reloadConfig(app: App) =
+  ## Re-read the config file and apply it. Window size (cols/rows) only
+  ## matters at startup; command and working-directory apply to new tabs.
+  app.configStamp = stamp(configFile(app.cli.configPath))
+  let cfg = reloadConfig(app.cli.configPath)
+  if cfg.isNone: return            # unreadable or invalid: keep what we have
+  let old = app.opts
+  var o = merge(cfg.get, app.cli)
+  o.screenshot = old.screenshot
+  app.opts = o
+  for tab in app.tabs:
+    app.applyColors(tab.term)
+    var sb = csize_t(o.scrollback)
+    discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, addr sb)
+  app.applySelectionColors()
+  var fontChanged = false
+  if o.font != old.font:
+    try:
+      app.rd.setFonts(resolveFonts(o.font))
+      fontChanged = true
+    except IOError as e:
+      stderr.writeLine "ghostnim: " & e.msg
+      app.opts.font = old.font
+  if o.size != old.size: app.zoom(o.size)             # also resets any zoom
+  elif fontChanged: app.zoom(app.rd.fontSize)        # new cell size
+  app.needsFull = true
+  stderr.writeLine "ghostnim: reloaded " & configFile(app.cli.configPath)
+
+proc openConfig(app: App) =
+  ## Open the config file for editing, creating it from the commented
+  ## defaults first if needed. $VISUAL or $EDITOR runs in a new tab;
+  ## without either, the desktop's handler for the file (xdg-open).
+  let path = configFile(app.cli.configPath)
+  if not ensureConfigFile(path): return
+  let editor = getEnv("VISUAL", getEnv("EDITOR"))
+  if editor.len > 0:
+    # Through sh so an $EDITOR with arguments ("code --wait") works.
+    app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path])
+  elif findExe("xdg-open").len > 0:
+    discard execShellCmd("xdg-open " & quoteShell(path) & " >/dev/null 2>&1 &")
+  else:
+    app.addTab(@["vi", path])
+
+proc checkConfigChanged(app: App) =
+  ## Poll the config file (at most once a second) and reload when it changes.
+  let now = getTicks()
+  if now - app.configChecked < 1000: return
+  app.configChecked = now
+  if stamp(configFile(app.cli.configPath)) != app.configStamp:
+    app.reloadConfig()
+
 # --- context menu -----------------------------------------------------------
 
 proc runMenuAction(app: App, action: MenuAction) =
@@ -397,6 +545,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maZoomIn: app.zoom(app.rd.fontSize + 1)
   of maZoomOut: app.zoom(app.rd.fontSize - 1)
   of maZoomReset: app.zoom(app.opts.size)
+  of maOpenConfig: app.openConfig()
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -413,36 +562,44 @@ proc menuKey(app: App, e: KeyboardEvent) =
 
 # --- events -----------------------------------------------------------------
 
-proc handleShortcut(app: App, sym: int32, scancode: cint, mods: uint16): bool =
-  ## Terminal-level shortcuts. Returns true if the key was consumed.
-  let ctrl = (mods and KMOD_CTRL) != 0
-  let shift = (mods and KMOD_SHIFT) != 0
-  let key = toGhosttyKey(scancode)
-  if ctrl and shift and key == gkC:
-    app.copySelection(); return true
-  if ctrl and shift and key == gkV:
-    app.paste(); return true
-  if ctrl and shift and key == gkT:
-    app.addTab(); return true
-  if ctrl and shift and key == gkW:
-    app.closeTab(app.active); return true
-  if ctrl and key == gkTab:
-    app.cycleTab(if shift: -1 else: 1); return true
-  if ctrl and not shift and key in {gkPageUp, gkPageDown}:
-    app.cycleTab(if key == gkPageUp: -1 else: 1); return true
-  if shift and not ctrl and key in {gkPageUp, gkPageDown}:
+proc runAction(app: App, b: Binding) =
+  case b.action
+  of acNone: discard
+  of acCopy: app.copySelection()
+  of acPaste: app.paste()
+  of acSelectAll: app.selectAll()
+  of acNewTab: app.addTab()
+  of acCloseTab: app.closeTab(app.active)
+  of acNextTab: app.cycleTab(1)
+  of acPreviousTab: app.cycleTab(-1)
+  of acGotoTab:
+    if b.num <= app.tabs.len: app.activate(b.num - 1)
+  of acScrollPageUp, acScrollPageDown:
     var rows: uint16
     discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
     let d = max(1, rows.int div 2)
-    app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, if key == gkPageUp: -d else: d)
-    return true
-  if ctrl and not shift and key in {gkEqual, gkMinus, gkDigit0}:
-    app.zoom(case key
-             of gkEqual: app.rd.fontSize + 1
-             of gkMinus: app.rd.fontSize - 1
-             else: app.opts.size)
-    return true
-  false
+    app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                       if b.action == acScrollPageUp: -d else: d)
+  of acScrollToTop: app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_TOP)
+  of acScrollToBottom: app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_BOTTOM)
+  of acFontBigger: app.zoom(app.rd.fontSize + 1)
+  of acFontSmaller: app.zoom(app.rd.fontSize - 1)
+  of acFontReset: app.zoom(app.opts.size)
+  of acSendText: app.sendInput(b.text)
+  of acReloadConfig: app.reloadConfig()
+  of acOpenConfig: app.openConfig()
+
+proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
+  ## Keybindings from the config (or the defaults). True if the key was used.
+  var chord = Chord(key: toGhosttyKey(scancode))
+  if (mods and KMOD_CTRL) != 0: chord.mods.incl mCtrl
+  if (mods and KMOD_SHIFT) != 0: chord.mods.incl mShift
+  if (mods and KMOD_ALT) != 0: chord.mods.incl mAlt
+  if (mods and KMOD_GUI) != 0: chord.mods.incl mSuper
+  let b = app.opts.keybinds.getOrDefault(chord)
+  if b.action == acNone: return false
+  app.runAction(b)
+  true
 
 proc onKeyDown(app: App, e: KeyboardEvent) =
   let sym = e.keysym.sym
@@ -450,7 +607,11 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
   if app.menu.open:
     app.menuKey(e)
     return
-  if app.handleShortcut(sym, e.keysym.scancode, smods): return
+  if app.handleShortcut(e.keysym.scancode, smods):
+    # A binding like shift+a or alt+1 would also type its character.
+    app.hasPendingKey = false
+    app.suppressText = producesText(sym, smods)
+    return
   app.suppressText = false
   let key = toGhosttyKey(e.keysym.scancode)
   let mods = toGhosttyMods(smods)
@@ -557,14 +718,17 @@ proc reportMouse(app: App): bool =
 proc openMenu(app: App, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let (w, h) = app.outputSize()
+  let kb = app.opts.keybinds
   app.menu.show(app.rd, @[
-    item("Copy", maCopy, "Ctrl+Shift+C", app.hasSelection()),
-    item("Paste", maPaste, "Ctrl+Shift+V", hasClipboardText() != 0),
-    item("Select All", maSelectAll),
+    item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
+    item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
+    item("Select All", maSelectAll, kb.shortcutLabel(acSelectAll)),
     separator(),
-    item("Zoom In", maZoomIn, "Ctrl+="),
-    item("Zoom Out", maZoomOut, "Ctrl+-"),
-    item("Reset Zoom", maZoomReset, "Ctrl+0"),
+    item("Zoom In", maZoomIn, kb.shortcutLabel(acFontBigger)),
+    item("Zoom Out", maZoomOut, kb.shortcutLabel(acFontSmaller)),
+    item("Reset Zoom", maZoomReset, kb.shortcutLabel(acFontReset)),
+    separator(),
+    item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
   ], int(px), int(py), w, h)
 
 proc menuMouseButton(app: App, e: MouseButtonEvent, down: bool) =
@@ -706,34 +870,6 @@ proc saveScreenshot(app: App, path: string) =
       row[x * 3 + 2] = char((p shr 16) and 0xFF)
     f.write row
 
-proc parseOptions(): Options =
-  result = Options(size: 14, cols: 100, rows: 30, scrollback: 10_000)
-  let args = commandLineParams()
-  var i = 0
-  proc need(i: var int): string =
-    inc i
-    if i >= args.len:
-      quit("ghostnim: missing value for " & args[i - 1], 2)
-    args[i]
-  while i < args.len:
-    let a = args[i]
-    case a
-    of "-h", "--help": echo usage; quit(0)
-    of "-f", "--font": result.font = need(i)
-    of "-s", "--size": result.size = parseInt(need(i))
-    of "--cols": result.cols = parseInt(need(i))
-    of "--rows": result.rows = parseInt(need(i))
-    of "--scrollback": result.scrollback = parseInt(need(i))
-    of "--screenshot": result.screenshot = need(i)
-    of "-e", "--exec":
-      result.command = args[i + 1 .. ^1]
-      break
-    else:
-      quit("ghostnim: unknown option " & a & "\n\n" & usage, 2)
-    inc i
-  if result.command.len == 0: result.command = @[defaultShell()]
-
-
 # Window icon, embedded so it works without any installed files.
 let iconBmp = static(staticRead("../packaging/ghostnim-128.bmp"))
 
@@ -744,7 +880,9 @@ proc setIcon(window: WindowPtr) =
   freeSurface(icon)
 
 proc main() =
-  let opts = parseOptions()
+  let cli = parseCli()
+  let cfgStamp = stamp(configFile(cli.configPath))
+  let opts = merge(loadConfig(cli.configPath), cli)
   # Before SDL starts any threads, since this forks.
   if opts.screenshot.len == 0: startUpdateCheck()
   discard setHint("SDL_IM_MODULE", "")   # let the platform pick its IME
@@ -755,7 +893,8 @@ proc main() =
     quit("ghostnim: TTF_Init failed: " & $getError(), 1)
   defer: ttfQuit()
 
-  let app = App(opts: opts, running: true, needsFull: true)
+  let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
+                needsFull: true)
   let fontPaths = resolveFonts(opts.font)
 
   # Measure the cell size first so the initial window fits cols x rows.
@@ -771,6 +910,7 @@ proc main() =
   discard getRendererOutputSize(r, addr ow, addr oh)
   let scale = if ww > 0: ow.float / ww.float else: 1.0
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
+  app.applySelectionColors()
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))
@@ -803,6 +943,7 @@ proc main() =
       blinkOn = not blinkOn
       lastBlink = now
     if not app.running: break
+    if opts.screenshot.len == 0: app.checkConfigChanged()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
     app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
     app.menu.draw(app.rd)

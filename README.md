@@ -29,9 +29,9 @@ the event loop.
   SGR and more). Hold Shift to select instead.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
   with bracketed paste.
-- Right-click context menu with Copy, Paste, Select All and zoom, drawn
-  in-window and navigable with the arrow keys and Enter. When the application
-  has mouse reporting on, hold Shift to open it.
+- Right-click context menu with Copy, Paste, Select All, zoom and Open
+  Config, drawn in-window and navigable with the arrow keys and Enter. When
+  the application has mouse reporting on, hold Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
 - Tabs, each with its own shell and terminal state. The tab bar shows each
   tab's OSC title. Click a tab to switch to it, click × (or middle-click the
@@ -41,6 +41,8 @@ the event loop.
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= / Ctrl+- / Ctrl+0.
+- A KDL config file for fonts, window size, shell, start directory, colours
+  and keybindings, reloaded live when saved (see [Config file](#config-file)).
 
 ## Building
 
@@ -117,16 +119,72 @@ update it too. Locally built AppImages don't self-update unless built with
 ```
 ghostnim [options] [-e command [args...]]
 
+  -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
   -f, --font NAME|PATH   font family (fontconfig) or font file   [monospace]
   -s, --size N           font size in points                      [14]
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
+  -d, --working-directory DIR  start the first tab in DIR  [current directory]
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
 ```
 
 ghostnim sets `TERM=xterm-256color` for the child process.
+
+### Config file
+
+Settings can also go in a [KDL](https://kdl.dev) file at
+`$XDG_CONFIG_HOME/ghostnim/config.kdl` (usually
+`~/.config/ghostnim/config.kdl`), or wherever `--config` points. Each setting
+is a node named after its command-line option, and the command line wins:
+
+```kdl
+font "JetBrains Mono"
+font-size 13
+cols 120
+rows 36
+scrollback 50000
+command "fish" "--login"
+working-directory "~/code"
+
+colors {
+  foreground "#c0caf5"
+  background "#1a1b26"
+  cursor "#c0caf5"
+  selection-foreground "#c0caf5"
+  selection-background "#33467c"
+  palette 1 "#f7768e"   // one line per 256-colour palette entry to change
+}
+
+keybinds {
+  alt+1 goto-tab 1
+  ctrl+shift+enter send-text "\n"
+  ctrl+shift+w none     // unbind a default
+  "ctrl+=" font-bigger  // quote chords containing = / ; [ ] \
+}
+```
+
+Keybindings add to the defaults listed under Features (use
+`keybinds clear-defaults=#true { ... }` to start from none). Actions: `copy`,
+`paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
+`goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
+`scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
+`send-text "..."`, `reload-config`, `open-config` and `none`.
+
+**Open Config** in the right-click menu (or Ctrl+,) opens the file in
+`$VISUAL`/`$EDITOR` in a new tab, or with `xdg-open` if neither is set. If
+the file doesn't exist yet it's created from `docs/config.kdl` first.
+
+The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
+colours, keybindings and scrollback change in the open window; `command` and
+`working-directory` apply to new tabs, and `cols`/`rows` only size the first
+window. A file that doesn't parse is skipped and the previous settings stay.
+
+[`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
+what it does, so it's a good starting point to copy.
+Mistakes such as an unknown setting or a value out of range are reported on
+stderr and skipped, so a broken config never stops the terminal from starting.
 
 ## Layout
 
@@ -140,6 +198,9 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 | `src/ghostnim/input.nim` | SDL scancode/modifier → libghostty key mapping |
 | `src/ghostnim/pty.nim` | `forkpty`-based child process |
 | `src/ghostnim/sdl.nim` | Minimal SDL2/SDL_ttf bindings |
+| `src/ghostnim/config.nim` | Loads the KDL config file |
+| `src/ghostnim/keybinds.nim` | Key chords, actions and the default keybindings |
+| `src/ghostnim/kdl.nim` | Small dependency-free KDL parser |
 | `src/ghostnim/update.nim` | Background self-update for CI-built AppImages |
 
 ## Notes
@@ -147,4 +208,4 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 - libghostty-vt's API is still pre-1.0. The bindings target the commit pinned
   in `scripts/build-libghostty-vt.sh`.
 - Not implemented yet: Kitty graphics, ligatures/shaping, colour emoji,
-  hyperlinks, and a config file.
+  and hyperlinks.

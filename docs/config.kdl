@@ -1,0 +1,139 @@
+// ghostnim config file
+//
+// It lives at ~/.config/ghostnim/config.kdl (or
+// $XDG_CONFIG_HOME/ghostnim/config.kdl), or wherever --config FILE points.
+// "Open Config" in the right-click menu (Ctrl+,) opens it in $VISUAL or
+// $EDITOR, creating it with this content first if it doesn't exist yet.
+//
+// Every setting is optional, and each one below is set to its default, so
+// this file changes nothing until you edit it. Options given on the command
+// line override the file. A setting with a mistake in it is reported on
+// stderr and skipped; the rest of the file still applies.
+//
+// Changes apply as soon as you save the file (or press Ctrl+Shift+, to
+// reload by hand). cols and rows only size the first window, and command and
+// working-directory apply to tabs opened afterwards. If the file doesn't parse,
+// the reload is skipped and the previous settings stay.
+//
+// The syntax is KDL (https://kdl.dev): `name value`, one per line. `//`
+// starts a comment, and `/-` in front of a setting comments out all of it.
+
+// --- Font ------------------------------------------------------------------
+
+// Font family, looked up through fontconfig, or a path to a .ttf/.otf file.
+// For a family, its bold and italic faces are found too. Default: "monospace".
+// Command line: -f, --font.
+font "monospace"
+
+// Font size in points. Ctrl+= and Ctrl+- zoom, and Ctrl+0 goes back to this.
+// Default: 14. Command line: -s, --size.
+font-size 14
+
+// --- Window ----------------------------------------------------------------
+
+// Size of the first window, in character cells. Default: 100 x 30.
+// Command line: --cols, --rows.
+cols 100
+rows 30
+
+// --- Terminal --------------------------------------------------------------
+
+// Lines of scrollback history kept per tab. Default: 10000.
+// Command line: --scrollback.
+scrollback 10000
+
+// Program to run in each tab, with its arguments. Default: your login shell
+// ($SHELL, then the shell in /etc/passwd, then /bin/sh).
+// Command line: -e, --exec.
+/-command "fish" "--login"
+
+// Directory the first tab starts in. `~` means your home directory. New tabs
+// open in the current tab's directory. Default: the directory ghostnim was
+// launched from. Command line: -d, --working-directory.
+/-working-directory "~"
+
+// --- Colors ----------------------------------------------------------------
+
+// Colours are "#rrggbb" or "#rgb". Leave one out to keep the default: the
+// built-in theme for foreground, background, cursor and palette, and
+// swapped foreground/background for the selection. Programs can still
+// change these while they run (OSC 4/10/11/12).
+//
+// Remove the `/-` below to use this example theme (Tokyo Night).
+/-colors {
+  foreground "#c0caf5"
+  background "#1a1b26"
+  cursor "#c0caf5"
+  selection-foreground "#c0caf5"
+  selection-background "#33467c"
+
+  // The 256-colour palette, one entry per line: `palette INDEX "#rrggbb"`.
+  // 0-7 are the normal ANSI colours (black, red, green, yellow, blue,
+  // magenta, cyan, white), 8-15 their bright versions, and 16-255 the
+  // colour cube and greyscale ramp. Unlisted entries keep their defaults.
+  palette 0 "#15161e"
+  palette 1 "#f7768e"
+  palette 2 "#9ece6a"
+  palette 3 "#e0af68"
+  palette 4 "#7aa2f7"
+  palette 5 "#bb9af7"
+  palette 6 "#7dcfff"
+  palette 7 "#a9b1d6"
+  palette 8 "#414868"
+  palette 9 "#f7768e"
+  palette 10 "#9ece6a"
+  palette 11 "#e0af68"
+  palette 12 "#7aa2f7"
+  palette 13 "#bb9af7"
+  palette 14 "#7dcfff"
+  palette 15 "#c0caf5"
+}
+
+// --- Keybindings -----------------------------------------------------------
+
+// One shortcut per line: `CHORD ACTION`, plus an argument for the actions
+// that take one. These add to or change the defaults; bind a chord to `none`
+// to remove it, or write `keybinds clear-defaults=#true { ... }` to start
+// from nothing. The lines below are the defaults.
+//
+// Chords: any of ctrl, shift, alt and super, then one key, joined with `+`.
+// Keys are physical keys named as on a US layout: a-z, 0-9, f1-f25, enter,
+// tab, space, escape, backspace, delete, insert, home, end, page-up,
+// page-down, up, down, left, right, and punctuation (= - , . / ; ' ` [ ] \).
+// Quote a chord that contains = / ; [ ] \ or a quote, like "ctrl+=".
+//
+// Actions:
+//   copy, paste, select-all
+//   new-tab, close-tab, next-tab, previous-tab
+//   goto-tab N              switch to tab N (1 is the leftmost)
+//   scroll-page-up, scroll-page-down   scroll by half a screen
+//   scroll-to-top, scroll-to-bottom
+//   font-bigger, font-smaller, font-reset
+//   send-text "..."         type text into the program, e.g. "\n" or "\u{1b}b"
+//   reload-config           re-read this file (it also reloads when saved)
+//   open-config             edit this file ($VISUAL/$EDITOR in a new tab)
+//   none                    unbind the chord
+keybinds {
+  ctrl+shift+c copy
+  ctrl+shift+v paste
+  ctrl+shift+t new-tab
+  ctrl+shift+w close-tab
+  ctrl+tab next-tab
+  ctrl+shift+tab previous-tab
+  ctrl+page-down next-tab
+  ctrl+page-up previous-tab
+  shift+page-up scroll-page-up
+  shift+page-down scroll-page-down
+  "ctrl+=" font-bigger
+  ctrl+- font-smaller
+  ctrl+0 font-reset
+  ctrl+shift+, reload-config
+  ctrl+, open-config
+
+  // More examples, off until you remove the `/-`:
+  /-alt+1 goto-tab 1
+  /-alt+2 goto-tab 2
+  /-shift+home scroll-to-top
+  /-shift+end scroll-to-bottom
+  /-ctrl+shift+a select-all
+}
