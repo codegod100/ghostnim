@@ -116,17 +116,25 @@ proc fcList(pattern: string): seq[string] =
   except OSError:
     discard
 
-const DefaultFont* = "JetBrains Mono"
+const DefaultFonts* = ["Monaspace Neon Frozen", "Monaspace Neon"]
+  ## Tried in order when no font is configured. The Frozen build has its
+  ## ligatures (ss01-ss10) and texture healing on by default, which SDL_ttf
+  ## needs since it can't turn on OpenType features; plain Monaspace Neon
+  ## still gets texture healing.
 
 proc resolveFonts*(primary: string): array[Face, string] =
   ## Find regular/bold/italic/bold-italic font files. `primary` may be a
   ## path to a font file or a fontconfig family name.
-  # fc-match never fails, it substitutes: only ask for JetBrains Mono by name
-  # when it is installed (or bundled), else the default could be proportional.
-  let family =
-    if primary.len > 0: primary
-    elif fcList(DefaultFont).len > 0: DefaultFont
-    else: "monospace"
+  # fc-match never fails, it substitutes: only ask for a default family by
+  # name when it is installed (or bundled), else we could get a proportional
+  # font.
+  var family = primary
+  if family.len == 0:
+    family = "monospace"
+    for f in DefaultFonts:
+      if fcList(f).len > 0:
+        family = f
+        break
   if fileExists(primary):
     result[faceRegular] = primary
   else:
@@ -135,7 +143,7 @@ proc resolveFonts*(primary: string): array[Face, string] =
     result[faceItalic] = fcMatch(family & ":italic")
     result[faceBoldItalic] = fcMatch(family & ":bold:italic")
   if result[faceRegular].len == 0:
-    for p in [bundledShare() / "fonts" / "jetbrains-mono" / "JetBrainsMono-Regular.ttf",
+    for p in [bundledShare() / "fonts" / "monaspace" / "MonaspaceNeonFrozen-Regular.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
               "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
               "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",

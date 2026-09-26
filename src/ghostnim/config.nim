@@ -2,7 +2,7 @@
 ## `~/.config/ghostnim/config.kdl`). Each setting is a node named after the
 ## matching command-line option; the command line wins over the file.
 ##
-##   font "JetBrains Mono"
+##   font "Monaspace Neon"
 ##   font-size 13
 ##   font-shaping #false        // no ligatures or contextual alternates
 ##   cols 120

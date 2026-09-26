@@ -17,7 +17,7 @@ Usage: ghostnim [options] [-e command [args...]]
 
 Options:
   -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
-  -f, --font NAME|PATH   font family (fontconfig) or font file   [JetBrains Mono]
+  -f, --font NAME|PATH   font family (fontconfig) or font file   [Monaspace Neon Frozen]
   -s, --size N           font size in points                      [14]
       --no-font-shaping  draw characters one by one: no ligatures or
                          contextual alternates

@@ -2,8 +2,8 @@
 ##
 ## Cells are normally drawn one character at a time, which is fast (a glyph
 ## cache hit per cell) but skips OpenType shaping: no programming ligatures
-## (JetBrains Mono, Fira Code) and no contextual alternates (Monaspace's
-## texture healing). For a run of same-styled cells we ask HarfBuzz whether
+## (Monaspace Frozen, JetBrains Mono, Fira Code) and no contextual alternates
+## (Monaspace's texture healing). For a run of same-styled cells we ask HarfBuzz whether
 ## shaping changes any glyph; only then is the run drawn as one string, which
 ## SDL_ttf shapes with HarfBuzz too. A run is only drawn that way if its shaped
 ## advances still add up to exactly one cell per character, so it stays on

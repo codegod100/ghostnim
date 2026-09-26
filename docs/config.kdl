@@ -22,17 +22,20 @@
 // --- Font ------------------------------------------------------------------
 
 // Font family, looked up through fontconfig, or a path to a .ttf/.otf file.
-// For a family, its bold and italic faces are found too. Default: "JetBrains
-// Mono", or fontconfig's "monospace" if JetBrains Mono isn't installed.
+// For a family, its bold and italic faces are found too. Default: "Monaspace
+// Neon Frozen" (bundled in the AppImage), else "Monaspace Neon", else
+// fontconfig's "monospace". The Frozen build has Monaspace's coding ligatures
+// switched on; plain "Monaspace Neon" only gets texture healing.
 // Command line: -f, --font.
-font "JetBrains Mono"
+font "Monaspace Neon Frozen"
 
 // Font size in points. Ctrl+= and Ctrl+- zoom, and Ctrl+0 goes back to this.
 // Default: 14. Command line: -s, --size.
 font-size 14
 
-// Shape text, so fonts can draw programming ligatures (JetBrains Mono's ->,
-// !=, ...) and contextual alternates (Monaspace's texture healing).
+// Shape text, so fonts can draw programming ligatures (->, !=, ... in
+// Monaspace Frozen, JetBrains Mono, Fira Code) and contextual alternates
+// (Monaspace's texture healing).
 // Default: #true. Command line: --no-font-shaping turns it off.
 font-shaping #true
 
