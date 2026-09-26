@@ -4,15 +4,15 @@
 ## state, scrollback, reflow, key/mouse encoding and produces a render
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
-import std/[os, strutils, posix, sequtils, options]
+import std/[os, strutils, posix, sequtils, options, algorithm]
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
                 wordsel, paths, filepane]
 
 const
   version = "0.1.0"
   blinkIntervalMs = 600'u32
-  shownRecentDirs = 5      ## folders in the strip under the tabs
-  keptRecentDirs = 30      ## history kept per tab
+  shownRecentDirs = 12     ## folders offered in the strip under the tabs (as many as fit)
+  keptRecentDirs = 50      ## history kept, shared by all tabs
   defaultPaneWidth = 240   ## file pane width in window pixels
   usage = """
 ghostnim """ & version & """ - a Nim terminal powered by libghostty-vt
@@ -98,6 +98,11 @@ type
     keybinds: Keybinds
     screenshot: string
 
+  RecentDir = object
+    path: string
+    visits: int               ## times a tab has gone there
+    lastVisit: int            ## app.dirVisits at the latest one
+
   SelectUnit = enum
     ## What a selection drag grows by: cells, or (after a double or triple
     ## click) whole words or lines.
@@ -117,7 +122,7 @@ type
     state: GhosttyRenderState
     title: string
     titleChanged: bool
-    dirs: seq[string]         ## directories visited, most recent (current) first
+    lastDir: string           ## working directory when last looked at
     watch: ptr PtyWatch
     thread: ptr SdlThread
 
@@ -130,6 +135,8 @@ type
     rd: Renderer
     tabs: seq[Tab]
     active: int
+    dirs: seq[RecentDir]       ## folders any tab has been in, most used first
+    dirVisits: int             ## visits counted so far, to order ties by recency
     nextId: int32
     keyEncoder: GhosttyKeyEncoder
     keyEvent: GhosttyKeyEvent
@@ -410,12 +417,11 @@ proc activate(app: App, i: int) =
 proc addTab(app: App, command: seq[string] = @[], dir = "") =
   ## Open a tab next to the current one, in `dir` if given, else in the
   ## current tab's directory (or in working-directory, with
-  ## inherit-directory off). It starts with the current tab's recent folders.
+  ## inherit-directory off).
   let cwd = if dir.len > 0: dir
             elif app.opts.inheritDirectory: app.cur.pty.cwd
             else: ""
   let tab = app.newTab(cwd, command)
-  tab.dirs = app.cur.dirs
   app.tabs.insert(tab, app.active + 1)
   app.activate(app.active + 1)
 
@@ -652,24 +658,48 @@ proc stateDir(): string =
 proc folderBarHiddenFlag(): string = stateDir() / "folder-bar-hidden"
   ## Exists while the recent-folders strip is turned off.
 
+proc findDir(app: App, dir: string): int =
+  for i, d in app.dirs:
+    if d.path == dir: return i
+  -1
+
 proc trackDirs(app: App) =
-  ## Note each tab's working directory (a few times a second at most), so its
-  ## recent folders follow it around.
+  ## Note each tab's working directory (a few times a second at most),
+  ## counting a visit whenever one moves, in the list all tabs share.
   let now = getTicks()
   if now - app.dirsChecked < 250: return
   app.dirsChecked = now
+  var changed = false
   for tab in app.tabs:
     let dir = tab.pty.cwd
-    if dir.len == 0 or (tab.dirs.len > 0 and tab.dirs[0] == dir): continue
-    let i = tab.dirs.find(dir)
-    if i >= 0: tab.dirs.delete(i)
-    tab.dirs.insert(dir, 0)
-    if tab.dirs.len > keptRecentDirs: tab.dirs.setLen(keptRecentDirs)
+    if dir.len == 0 or dir == tab.lastDir: continue
+    tab.lastDir = dir
+    inc app.dirVisits
+    let i = app.findDir(dir)
+    if i >= 0:
+      inc app.dirs[i].visits
+      app.dirs[i].lastVisit = app.dirVisits
+    else:
+      app.dirs.add RecentDir(path: dir, visits: 1, lastVisit: app.dirVisits)
+    changed = true
+  if not changed: return
+  app.dirs.sort(proc (a, b: RecentDir): int =
+    result = cmp(b.visits, a.visits)
+    if result == 0: result = cmp(b.lastVisit, a.lastVisit))
+  if app.dirs.len > keptRecentDirs:
+    # Make room by dropping the least recently visited, not the least used,
+    # so new folders get a chance to build up visits.
+    var byAge = app.dirs
+    byAge.sort(proc (a, b: RecentDir): int = cmp(b.lastVisit, a.lastVisit))
+    let cutoff = byAge[keptRecentDirs - 1].lastVisit
+    app.dirs.keepItIf(it.lastVisit >= cutoff)
 
 proc recentDirs(app: App): seq[string] =
-  ## The current tab's recent folders, not counting the one it's in.
-  let dirs = app.cur.dirs
-  if dirs.len > 1: dirs[1 .. min(shownRecentDirs, dirs.len - 1)] else: @[]
+  ## The most used folders, not counting the one the current tab is in.
+  let here = app.cur.pty.cwd
+  for d in app.dirs:
+    if result.len >= shownRecentDirs: break
+    if d.path != here: result.add d.path
 
 proc folderLabel(dir: string): string =
   if dir == getHomeDir().strip(leading = false, chars = {'/'}): "~"
@@ -682,8 +712,8 @@ proc goToDir(app: App, dir: string, newTab = false) =
   ## cd the current tab's shell into `dir`, or, if a program is running in
   ## it (or `newTab`), open a new tab there.
   if not dirExists(dir):
-    let i = app.cur.dirs.find(dir)
-    if i >= 0: app.cur.dirs.delete(i)
+    let i = app.findDir(dir)
+    if i >= 0: app.dirs.delete(i)
     return
   if newTab or not app.cur.pty.atPrompt:
     app.addTab(dir = dir)
