@@ -262,8 +262,20 @@ proc parseCli(): Cli =
       quit("ghostnim: unknown option " & a & "\n\n" & usage, 2)
     inc i
 
+proc launchedFromDesktop(): bool =
+  ## Desktop launchers start programs in $HOME or /. Anywhere else (a file
+  ## manager's "Open Terminal Here", a shell in some project) was chosen on
+  ## purpose, so the first tab should start there.
+  try:
+    let cwd = getCurrentDir()
+    result = cwd == "/" or sameFile(cwd, getHomeDir())
+  except OSError:
+    result = true
+
 proc merge(cfg: Config, cli: Cli): Options =
-  ## The config file's settings with the command line's on top.
+  ## The config file's settings with the command line's on top. The config's
+  ## working-directory only replaces the launch directory when that's just
+  ## the desktop's default.
   template pick(c, f: untyped): untyped = (if c: cli.f else: cfg.f)
   result = Options(
     font: pick(cli.font.len > 0, font),
@@ -272,7 +284,10 @@ proc merge(cfg: Config, cli: Cli): Options =
     rows: pick(cli.rows > 0, rows),
     scrollback: pick(cli.scrollback >= 0, scrollback),
     command: pick(cli.command.len > 0, command),
-    workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
+    workingDirectory:
+      if cli.workingDirectory.len > 0: cli.workingDirectory
+      elif launchedFromDesktop(): cfg.workingDirectory
+      else: "",
     inheritDirectory: cfg.inheritDirectory and not cli.noInheritDirectory,
     fontShaping: cfg.fontShaping and not cli.noFontShaping,
     copyOnSelect: cfg.copyOnSelect,

@@ -208,7 +208,10 @@ the file doesn't exist yet it's created from `docs/config.kdl` first.
 The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
 font shaping, colours, keybindings and scrollback change in the open window; `command`,
 `working-directory` and `inherit-directory` apply to new tabs, and
-`cols`/`rows` only size the first window. A file that doesn't parse is skipped and the previous settings stay.
+`cols`/`rows` only size the first window.
+`working-directory` is only used when ghostnim is launched from your home
+directory or `/` (as desktop launchers do), so a file manager's "Open
+Terminal Here" still opens in the folder you picked. A file that doesn't parse is skipped and the previous settings stay.
 
 [`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
 what it does, so it's a good starting point to copy.
