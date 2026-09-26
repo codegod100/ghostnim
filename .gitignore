@@ -1,0 +1,4 @@
+/vendor/
+/ghostnim
+/nimcache/
+*.o
