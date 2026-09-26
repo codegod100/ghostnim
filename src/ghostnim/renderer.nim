@@ -368,6 +368,11 @@ proc textWidth*(rd: Renderer, text: string): int =
   ## Width in output pixels of `text` drawn in the regular face.
   if text.len == 0: 0 else: rd.glyph(text, faceRegular).w.int
 
+proc hasGlyph*(rd: Renderer, text: string): bool =
+  ## True if some font (configured, fallback or bundled) can draw the first
+  ## character of `text`, e.g. whether a Nerd Font icon is available.
+  text.len > 0 and glyphIsProvided32(rd.fontFor(faceRegular, text), firstCodepoint(text)) != 0
+
 proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
   ## Draw a UI string (not terminal cells) with its top-left at (x, y).
   if text.len == 0: return

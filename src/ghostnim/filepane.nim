@@ -6,7 +6,7 @@
 ## are in output (HiDPI) pixels.
 
 import std/[os, algorithm, strutils, times]
-from std/unicode import runeLen, runeSubStr
+from std/unicode import Rune, `$`, runeLen, runeSubStr
 import sdl, renderer
 
 const maxEntries = 5000     ## enough for any folder worth browsing
@@ -205,6 +205,83 @@ proc drawFileIcon(rd: Renderer, x, y, w, h: int, c: Rgb) =
     rd.fillRect(tx, y + h div 2, tw, l)
     rd.fillRect(tx, y + h div 2 + 2 * l, tw * 2 div 3, l)
 
+# Nerd Font icons by file name or extension (lowercase), with the palette
+# entry to colour them: 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan;
+# -1 is the foreground. The AppImage bundles Symbols Nerd Font; without one,
+# files get the drawn page icon.
+const nameIcons = [
+  ("makefile gnumakefile", 0xE673, 1),
+  ("dockerfile containerfile", 0xE650, 4),
+  ("license licence copying license.md license.txt", 0xE60A, 3),
+  (".gitignore .gitattributes .gitmodules", 0xE702, 1),
+  (".bashrc .bash_profile .zshrc .zprofile .profile", 0xE691, 2)]
+
+const extIcons = [
+  ("nim nims nimble", 0xE677, 3),
+  ("py pyi", 0xE606, 4),
+  ("js mjs cjs", 0xE60C, 3),
+  ("ts mts cts", 0xE628, 4),
+  ("jsx tsx", 0xE625, 6),
+  ("rs", 0xE68B, 1),
+  ("go", 0xE627, 6),
+  ("c h", 0xE649, 4),
+  ("cpp cc cxx hpp hh hxx", 0xE646, 4),
+  ("zig", 0xE6A9, 3),
+  ("lua", 0xE620, 4),
+  ("rb", 0xE605, 1),
+  ("java", 0xE66D, 1),
+  ("kt kts", 0xE634, 5),
+  ("swift", 0xE699, 1),
+  ("php", 0xE608, 5),
+  ("hs", 0xE61F, 5),
+  ("ex exs", 0xE62D, 5),
+  ("ml mli", 0xE67A, 3),
+  ("jl", 0xE624, 5),
+  ("clj cljs edn", 0xE642, 2),
+  ("scala", 0xE68E, 1),
+  ("dart", 0xE64C, 4),
+  ("vim", 0xE62B, 2),
+  ("nix", 0xF1105, 4),
+  ("sh bash zsh fish", 0xE691, 2),
+  ("html htm", 0xE60E, 1),
+  ("css", 0xE614, 4),
+  ("scss sass", 0xE603, 5),
+  ("svelte", 0xE697, 1),
+  ("vue", 0xE6A0, 2),
+  ("json jsonc", 0xE60B, 3),
+  ("toml", 0xE6B2, 6),
+  ("yml yaml", 0xE6A8, 5),
+  ("xml", 0xE619, 3),
+  ("ini conf cfg kdl", 0xE615, 6),
+  ("md markdown", 0xE609, 4),
+  ("tex", 0xE69B, 2),
+  ("csv tsv", 0xE64A, 2),
+  ("sql db sqlite sqlite3", 0xE64D, 3),
+  ("lock", 0xE672, -1),
+  ("txt log", 0xE64E, -1),
+  ("pdf", 0xE67D, 1),
+  ("doc docx odt", 0xF022C, 4),
+  ("xls xlsx ods", 0xF021B, 2),
+  ("ppt pptx odp", 0xF0227, 1),
+  ("png jpg jpeg gif bmp webp ico tiff", 0xE60D, 5),
+  ("svg", 0xE698, 3),
+  ("mp3 flac wav ogg opus m4a", 0xE638, 6),
+  ("mp4 mkv webm mov avi", 0xE69F, 5),
+  ("ttf otf woff woff2", 0xE659, 1),
+  ("zip tar gz tgz xz bz2 zst 7z rar", 0xE6AA, 3)]
+
+proc fileIcon(name: string): tuple[glyph: string, color: int] =
+  ## The icon for a file called `name`, or "" if it has none.
+  let name = name.toLowerAscii
+  for (keys, cp, color) in nameIcons:
+    if name in keys.split(' '): return ($Rune(cp), color)
+  let dot = name.rfind('.')
+  if dot > 0:                                      # not a bare dotfile
+    let ext = name[dot + 1 .. ^1]
+    for (keys, cp, color) in extIcons:
+      if ext in keys.split(' '): return ($Rune(cp), color)
+  ("", -1)
+
 proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
   ## Composite the pane onto the backbuffer, in the terminal's colours. With
   ## keyboard focus, the selected entry is highlighted in the accent colour.
@@ -239,7 +316,12 @@ proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
       rd.fillRect(0, y, rd.left, rd.rowH)
     let iy = y + (rd.rowH - iconH) div 2
     let dim = if e.isHidden: 0.6 else: 1.0     # dotfiles are drawn fainter
+    let (glyph, color) = if e.isDir: ("", -1) else: fileIcon(e.name)
     if e.isDir: rd.drawFolderIcon(rd.padX, iy, iconW, iconH, mix(bg, accent, 0.85 * dim))
+    elif glyph.len > 0 and rd.hasGlyph(glyph):
+      let c = if color < 0: fg else: rgb(rd.colors.palette[color])
+      rd.drawText(glyph, rd.padX + (iconW - rd.textWidth(glyph)) div 2, y + rd.padY,
+                  mix(bg, c, (if color < 0: 0.6 else: 0.9) * dim))
     else: rd.drawFileIcon(rd.padX + iconW div 8, iy - iconH div 6, iconW,
                           iconH + iconH div 3, mix(bg, fg, max(0.35, 0.45 * dim)))
     let textT = if e.isDir or i == p.selected: 1.0 else: 0.75
