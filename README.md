@@ -95,6 +95,23 @@ and their dependencies are bundled. If your SDL2 is sdl2-compat (as on Arch),
 the SDL3 library it loads at runtime is bundled too. Fonts are still found
 through the host's fontconfig.
 
+### Prebuilt AppImage and updates
+
+CI (`.github/workflows/appimage.yml`) builds the AppImage on every push and
+pull request, and each push to `main` publishes it as the latest
+[release](https://github.com/codegod100/ghostnim/releases/latest) as
+`ghostnim-x86_64.AppImage`.
+
+Those builds update themselves: at most once a day, on launch, a background
+process compares the running AppImage with the latest release (by the SHA-1
+in its `.zsync` file). If they differ, it downloads the new AppImage, checks
+it, and replaces the file in place, so the next launch runs the new version.
+This needs `curl` and `sha1sum` on the host and a writable AppImage file; set
+`GHOSTNIM_NO_UPDATE=1` to turn it off. The update information is also
+embedded in the AppImage, so AppImageUpdate, Gear Lever and similar tools can
+update it too. Locally built AppImages don't self-update unless built with
+`NIM_FLAGS=-d:autoUpdate`.
+
 ## Usage
 
 ```
@@ -123,6 +140,7 @@ ghostnim sets `TERM=xterm-256color` for the child process.
 | `src/ghostnim/input.nim` | SDL scancode/modifier → libghostty key mapping |
 | `src/ghostnim/pty.nim` | `forkpty`-based child process |
 | `src/ghostnim/sdl.nim` | Minimal SDL2/SDL_ttf bindings |
+| `src/ghostnim/update.nim` | Background self-update for CI-built AppImages |
 
 ## Notes
 
