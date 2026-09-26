@@ -5,7 +5,7 @@
 ## them into a persistent grid texture. Only rows libghostty marks dirty are
 ## redrawn; the cursor and the tab bar are composited on top every frame.
 
-import std/[tables, osproc, strutils, os, strtabs, options]
+import std/[tables, osproc, strutils, os, strtabs, options, math]
 from std/unicode import runes, runeLen, runeSubStr, `$`
 import vt, sdl, boxdraw, shaping
 
@@ -649,6 +649,70 @@ proc drawCellText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceReg
       discard renderCopy(rd.r, g.tex, nil, addr dst)
     cx += rd.cellW
 
+proc blendSpans(rd: Renderer, x0, y0, x1, y1: int, c: Rgb,
+                coverage: proc (px, py: float): float) =
+  ## Fill pixels in [x0, x1) x [y0, y1) with `c` at the alpha `coverage`
+  ## gives for each pixel centre, merging equal runs into one rect.
+  discard setRenderDrawBlendMode(rd.r, BLENDMODE_BLEND)
+  for y in y0 ..< y1:
+    var runX = x0
+    var runA = -1
+    for x in x0 .. x1:
+      let a = if x < x1: int(clamp(coverage(x.float + 0.5, y.float + 0.5), 0.0, 1.0) * 255 + 0.5)
+              else: -1
+      if a != runA:
+        if runA > 0:
+          rd.setColor(c, uint8(runA))
+          rd.fillRect(runX, y, x - runX, 1)
+        runX = x
+        runA = a
+  discard setRenderDrawBlendMode(rd.r, BLENDMODE_NONE)
+
+proc fillTopRounded(rd: Renderer, x, y, w, h, r: int, c: Rgb) =
+  ## A rectangle whose top corners are antialiased quarter circles.
+  let r = min(r, min(w div 2, h))
+  rd.setColor(c)
+  rd.fillRect(x + r, y, w - 2 * r, r)
+  rd.fillRect(x, y + r, w, h - r)
+  proc corner(x0: int, cx: float) =
+    let (rf, cy) = (r.float, float(y + r))
+    rd.blendSpans(x0, y, x0 + r, y + r, c, proc (px, py: float): float =
+      rf + 0.5 - hypot(px - cx, py - cy))
+  corner(x, float(x + r))
+  corner(x + w - r, float(x + w - r))
+
+proc strokeSegments(rd: Renderer, segs: openArray[(float, float, float, float)],
+                    width: float, c: Rgb) =
+  ## Antialiased strokes with round caps between the given end points.
+  var x0 = high(int)
+  var y0 = high(int)
+  var x1 = low(int)
+  var y1 = low(int)
+  for (ax, ay, bx, by) in segs:
+    x0 = min(x0, int(floor(min(ax, bx) - width)))
+    y0 = min(y0, int(floor(min(ay, by) - width)))
+    x1 = max(x1, int(ceil(max(ax, bx) + width)))
+    y1 = max(y1, int(ceil(max(ay, by) + width)))
+  let segs = @segs
+  let half = width / 2
+  rd.blendSpans(x0, y0, x1, y1, c, proc (px, py: float): float =
+    var d = Inf
+    for (ax, ay, bx, by) in segs:
+      let (dx, dy) = (bx - ax, by - ay)
+      let t = clamp(((px - ax) * dx + (py - ay) * dy) / max(1e-9, dx * dx + dy * dy), 0.0, 1.0)
+      d = min(d, hypot(px - ax - t * dx, py - ay - t * dy))
+    half + 0.5 - d)
+
+proc drawCloseIcon(rd: Renderer, cx, cy: float, size: float, c: Rgb) =
+  let k = size / 2
+  rd.strokeSegments([(cx - k, cy - k, cx + k, cy + k), (cx - k, cy + k, cx + k, cy - k)],
+                    max(1.2, 1.4 * rd.scale), c)
+
+proc drawPlusIcon(rd: Renderer, cx, cy: float, size: float, c: Rgb) =
+  let k = size / 2
+  rd.strokeSegments([(cx - k, cy, cx + k, cy), (cx, cy - k, cx, cy + k)],
+                    max(1.2, 1.6 * rd.scale), c)
+
 proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   ## Draw the tab bar across the top of the window. Call after `draw`, which
   ## refreshes the colours from the active terminal.
@@ -659,31 +723,41 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   let n = titles.len
   let tabW = rd.tabWidth(n)
   let closeW = rd.closeWidth(tabW)
-  let textY = (rd.top - rd.cellH) div 2
   let line = max(1, int(rd.scale))
+  let inset = max(2, rd.top div 6)            # gap above a tab and between tabs
+  let radius = max(3, rd.top div 3)
+  let textY = inset + (rd.top - inset - rd.cellH) div 2
+  let iconSize = max(6.0, rd.cellH.float * 0.36)
   rd.setColor(barBg)
   rd.fillRect(0, 0, rd.gridW, rd.top)
-  for i, title in titles:
-    let x = i * tabW
-    let isActive = i == active
-    if isActive:
-      rd.setColor(bg)
-      rd.fillRect(x, 0, tabW, rd.top)
-      rd.setColor(accent)
-      rd.fillRect(x, 0, tabW, 2 * line)
-    elif i + 1 != active:
-      rd.setColor(mix(bg, fg, 0.25))
-      rd.fillRect(x + tabW - line, rd.top div 4, line, rd.top div 2)
-    let textFg = if isActive: fg else: mix(bg, fg, 0.6)
-    # Title, cut to the space left of the close button.
-    let maxChars = (tabW - closeW - rd.cellW) div rd.cellW
-    var label = if title.len > 0: title else: "shell"
-    if label.runeLen > maxChars:
-      label = if maxChars > 1: label.runeSubStr(0, maxChars - 1) & "…" else: ""
-    rd.drawCellText(label, x + rd.cellW, textY, textFg, if isActive: faceBold else: faceRegular)
-    rd.drawCellText("×", x + tabW - closeW + (closeW - rd.cellW) div 2, textY, textFg)
-  rd.drawCellText("+", n * tabW + (rd.top - rd.cellW) div 2, textY, mix(bg, fg, 0.6))
+  # The border under the bar, broken where the active tab joins the terminal.
   rd.setColor(mix(bg, fg, 0.2))
   let activeX = active * tabW
   rd.fillRect(0, rd.top - line, activeX, line)
   rd.fillRect(activeX + tabW, rd.top - line, rd.gridW - activeX - tabW, line)
+  for i, title in titles:
+    let x = i * tabW
+    let isActive = i == active
+    if isActive:
+      # Rounded tab, outlined in the border colour, flowing into the terminal.
+      rd.fillTopRounded(x + inset div 2, inset, tabW - inset, rd.top - inset,
+                        radius, mix(bg, fg, 0.2))
+      rd.fillTopRounded(x + inset div 2 + line, inset + line, tabW - inset - 2 * line,
+                        rd.top - inset - line, radius - line, bg)
+      rd.setColor(accent)
+      rd.fillRect(x + inset div 2 + radius, inset + line, tabW - inset - 2 * radius, line)
+    elif i + 1 != active:
+      rd.setColor(mix(bg, fg, 0.25))
+      rd.fillRect(x + tabW - line, inset + (rd.top - inset) div 4, line, (rd.top - inset) div 2)
+    let textFg = if isActive: fg else: mix(bg, fg, 0.6)
+    # Title, cut to the space left of the close button.
+    let maxChars = (tabW - closeW - rd.cellW - inset) div rd.cellW
+    var label = if title.len > 0: title else: "shell"
+    if label.runeLen > maxChars:
+      label = if maxChars > 1: label.runeSubStr(0, maxChars - 1) & "…" else: ""
+    rd.drawCellText(label, x + inset div 2 + rd.cellW, textY, textFg,
+                    if isActive: faceBold else: faceRegular)
+    rd.drawCloseIcon(float(x + tabW - inset div 2) - closeW.float / 2,
+                     textY.float + rd.cellH.float / 2, iconSize, textFg)
+  rd.drawPlusIcon(float(n * tabW) + rd.top.float / 2,
+                  textY.float + rd.cellH.float / 2, iconSize * 1.2, mix(bg, fg, 0.6))
