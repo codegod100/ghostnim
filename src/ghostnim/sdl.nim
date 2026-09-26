@@ -32,6 +32,8 @@ type
 
   Surface* {.importc: "SDL_Surface", header: sdlHeader, incompleteStruct.} = object
     w*, h*: cint
+    pitch*: cint
+    pixels*: pointer
   SurfacePtr* = ptr Surface
 
   Keysym* {.sdlType, importc: "SDL_Keysym".} = object
@@ -108,6 +110,7 @@ const
   TEXTUREACCESS_TARGET* = 2.cint
   BLENDMODE_NONE* = 0.cint
   BLENDMODE_BLEND* = 1.cint
+  SCALEMODE_LINEAR* = 1.cint
 
   # Event types
   EV_QUIT* = 0x100'u32
@@ -192,6 +195,8 @@ proc createTextureFromSurface*(r: RendererPtr, s: SurfacePtr): TexturePtr {.
 proc destroyTexture*(t: TexturePtr) {.sdl, importc: "SDL_DestroyTexture".}
 proc setTextureColorMod*(t: TexturePtr, r, g, b: uint8): cint {.
   sdl, importc: "SDL_SetTextureColorMod".}
+proc setTextureScaleMode*(t: TexturePtr, mode: cint): cint {.
+  sdl, importc: "SDL_SetTextureScaleMode".}
 proc setTextureAlphaMod*(t: TexturePtr, a: uint8): cint {.sdl, importc: "SDL_SetTextureAlphaMod".}
 proc setTextureBlendMode*(t: TexturePtr, mode: cint): cint {.
   sdl, importc: "SDL_SetTextureBlendMode".}
