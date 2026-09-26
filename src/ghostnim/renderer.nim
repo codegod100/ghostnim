@@ -621,7 +621,7 @@ proc mix(a, b: Rgb, t: float): Rgb =
   Rgb(r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b))
 
 proc tabWidth(rd: Renderer, n: int): int =
-  ## Tabs share the bar left of the "+" button, up to a comfortable maximum.
+  ## Tabs share the bar right of the "+" button, up to a comfortable maximum.
   max(1, min(32 * rd.cellW, (rd.gridW - rd.top) div max(1, n)))
 
 proc closeWidth(rd: Renderer, tabW: int): int = min(3 * rd.cellW, tabW div 3)
@@ -629,13 +629,13 @@ proc closeWidth(rd: Renderer, tabW: int): int = min(3 * rd.cellW, tabW div 3)
 proc hitTabBar*(rd: Renderer, n, x, y: int): TabHit =
   ## What lies under output pixel (x, y) in a bar showing `n` tabs.
   if y < 0 or y >= rd.top or x < 0: return
+  if x < rd.top: return TabHit(kind: hitNew)
   let tabW = rd.tabWidth(n)
-  let i = x div tabW
+  let tx = x - rd.top
+  let i = tx div tabW
   if i < n:
-    let kind = if x >= (i + 1) * tabW - rd.closeWidth(tabW): hitClose else: hitTab
+    let kind = if tx >= (i + 1) * tabW - rd.closeWidth(tabW): hitClose else: hitTab
     return TabHit(kind: kind, index: i)
-  if x >= n * tabW and x < n * tabW + rd.top:
-    return TabHit(kind: hitNew)
 
 proc drawCellText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceRegular) =
   ## Draw one line of text on the cell grid (one cell per codepoint).
@@ -731,11 +731,15 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   rd.fillRect(0, 0, rd.gridW, rd.top)
   # The border under the bar, broken where the active tab joins the terminal.
   rd.setColor(mix(bg, fg, 0.2))
-  let activeX = active * tabW
+  let activeX = rd.top + active * tabW
   rd.fillRect(0, rd.top - line, activeX, line)
   rd.fillRect(activeX + tabW, rd.top - line, rd.gridW - activeX - tabW, line)
+  if n > 0 and active != 0:
+    # Divider between the "+" button and the first tab.
+    rd.setColor(mix(bg, fg, 0.25))
+    rd.fillRect(rd.top - line, inset + (rd.top - inset) div 4, line, (rd.top - inset) div 2)
   for i, title in titles:
-    let x = i * tabW
+    let x = rd.top + i * tabW
     let isActive = i == active
     if isActive:
       # Rounded tab, outlined in the border colour, flowing into the terminal.
@@ -756,5 +760,5 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
                     if isActive: faceBold else: faceRegular)
     rd.drawCloseIcon(float(x + tabW - inset div 2) - closeW.float / 2,
                      textY.float + rd.cellH.float / 2, iconSize, textFg)
-  rd.drawPlusIcon(float(n * tabW) + rd.top.float / 2,
+  rd.drawPlusIcon(rd.top.float / 2,
                   textY.float + rd.cellH.float / 2, iconSize * 1.2, mix(bg, fg, 0.6))
