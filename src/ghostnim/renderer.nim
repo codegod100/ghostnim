@@ -15,7 +15,8 @@ type
 
   Glyph = object
     tex: TexturePtr
-    w, h: cint
+    w, h: cint               ## size to draw at, in output pixels
+    color: bool              ## has its own colours (emoji); don't tint it
 
   Rgb* = object
     ## Plain Nim colour; C structs are kept out of GC'd objects.
@@ -266,6 +267,23 @@ proc fontFor(rd: Renderer, face: Face, text: string): FontPtr =
   rd.fallbackForCp[cp] = found
   if found != nil: result = found
 
+proc isColorSurface(surf: SurfacePtr): bool =
+  ## True if a glyph rendered in white came back with other colours, i.e. it
+  ## came from a colour font (emoji). TTF_RenderUTF8_Blended returns ARGB8888.
+  if surf.pixels == nil: return false
+  for y in 0 ..< surf.h.int:
+    let row = cast[ptr UncheckedArray[uint32]](
+      cast[uint](surf.pixels) + uint(y * surf.pitch.int))
+    for x in 0 ..< surf.w.int:
+      let p = row[x]
+      if (p shr 24) != 0 and (p and 0xFFFFFF'u32) != 0xFFFFFF'u32: return true
+  false
+
+proc tint(g: Glyph, c: Rgb) =
+  ## Apply the text colour, except to colour glyphs, which keep their own.
+  if g.color: discard setTextureColorMod(g.tex, 255, 255, 255)
+  else: discard setTextureColorMod(g.tex, c.r, c.g, c.b)
+
 proc glyph(rd: Renderer, text: string, face: Face): Glyph =
   let font = rd.fontFor(face, text)
   let key = (text, cast[int](font))
@@ -276,8 +294,17 @@ proc glyph(rd: Renderer, text: string, face: Face): Glyph =
     result.tex = createTextureFromSurface(rd.r, surf)
     result.w = surf.w
     result.h = surf.h
+    result.color = isColorSurface(surf)
     freeSurface(surf)
     if result.tex != nil: discard setTextureBlendMode(result.tex, BLENDMODE_BLEND)
+    # Bitmap fonts such as Noto Color Emoji only come in fixed strike sizes
+    # (~128px) and ignore the requested point size, so shrink anything much
+    # taller than a cell to fit a two-cell slot, keeping its aspect ratio.
+    if result.w > 0 and result.h > rd.cellH * 3 div 2:
+      let k = min(rd.cellH / result.h.int, 2 * rd.cellW / result.w.int)
+      result.w = cint(max(1, int(result.w.float * k + 0.5)))
+      result.h = cint(max(1, int(result.h.float * k + 0.5)))
+      if result.tex != nil: discard setTextureScaleMode(result.tex, SCALEMODE_LINEAR)
   rd.glyphs[key] = result
 
 # --- drawing helpers -------------------------------------------------------
@@ -299,7 +326,7 @@ proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
   let g = rd.glyph(text, faceRegular)
   if g.tex == nil: return
   var dst = Rect(x: cint(x), y: cint(y), w: g.w, h: g.h)
-  discard setTextureColorMod(g.tex, color.r, color.g, color.b)
+  g.tint(color)
   discard setTextureAlphaMod(g.tex, 255)
   discard renderCopy(rd.r, g.tex, nil, addr dst)
 
@@ -320,7 +347,7 @@ proc drawGlyph(rd: Renderer, cell: CellInfo, col, row: int, fg: Rgb) =
   # 2-cell slot); left-align otherwise so ligature-free text stays aligned.
   let dx = if g.w < span and cell.wide: (span - g.w) div 2 else: 0
   var dst = Rect(x: cint(rd.cellX(col) + dx), y: cint(rd.cellY(row)), w: g.w, h: g.h)
-  discard setTextureColorMod(g.tex, fg.r, fg.g, fg.b)
+  g.tint(fg)
   discard setTextureAlphaMod(g.tex, if cell.faint: 128'u8 else: 255'u8)
   discard renderCopy(rd.r, g.tex, nil, addr dst)
 
@@ -542,7 +569,7 @@ proc drawCellText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceReg
     let g = rd.glyph($r, face)
     if g.tex != nil:
       var dst = Rect(x: cint(cx), y: cint(y), w: g.w, h: g.h)
-      discard setTextureColorMod(g.tex, fg.r, fg.g, fg.b)
+      g.tint(fg)
       discard setTextureAlphaMod(g.tex, 255)
       discard renderCopy(rd.r, g.tex, nil, addr dst)
     cx += rd.cellW
