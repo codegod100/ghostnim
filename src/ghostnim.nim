@@ -19,6 +19,8 @@ Options:
   -c, --config FILE      config file  [$XDG_CONFIG_HOME/ghostnim/config.kdl]
   -f, --font NAME|PATH   font family (fontconfig) or font file   [JetBrains Mono]
   -s, --size N           font size in points                      [14]
+      --no-font-shaping  draw characters one by one: no ligatures or
+                         contextual alternates
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
@@ -42,9 +44,9 @@ Right-click opens a menu with copy, paste, select all, zoom and Open Config
 (hold Shift to open it when the application has mouse reporting on).
 
 Every option except --config, --screenshot and --help can also be set in the
-config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
-`scrollback 50000`, `command "fish" "--login"`, `working-directory "~/code"`,
-`inherit-directory #false`, plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
+config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
+`cols 120`, `rows 36`, `scrollback 50000`, `command "fish" "--login"`,
+`working-directory "~/code"`, `inherit-directory #false`, plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
@@ -56,6 +58,7 @@ type
     scrollback: int          ## -1 when not given
     command: seq[string]
     noInheritDirectory: bool
+    noFontShaping: bool
 
   Options = object
     font: string
@@ -65,6 +68,7 @@ type
     command: seq[string]
     workingDirectory: string
     inheritDirectory: bool
+    fontShaping: bool
     colors: Colors
     keybinds: Keybinds
     screenshot: string
@@ -229,6 +233,7 @@ proc parseCli(): Cli =
       if not dirExists(result.workingDirectory):
         quit("ghostnim: no such directory: " & result.workingDirectory, 2)
     of "--no-inherit-directory": result.noInheritDirectory = true
+    of "--no-font-shaping": result.noFontShaping = true
     of "--screenshot": result.screenshot = need(i)
     of "-e", "--exec":
       result.command = args[i + 1 .. ^1]
@@ -249,6 +254,7 @@ proc merge(cfg: Config, cli: Cli): Options =
     command: pick(cli.command.len > 0, command),
     workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
     inheritDirectory: cfg.inheritDirectory and not cli.noInheritDirectory,
+    fontShaping: cfg.fontShaping and not cli.noFontShaping,
     colors: cfg.colors, keybinds: cfg.keybinds, screenshot: cli.screenshot)
   if result.command.len == 0: result.command = @[defaultShell()]
 
@@ -277,6 +283,7 @@ proc applySelectionColors(app: App) =
     (if c.isSome: some(Rgb(r: c.get.r, g: c.get.g, b: c.get.b)) else: none(Rgb))
   app.rd.selectionFg = toRgb(app.opts.colors.selectionForeground)
   app.rd.selectionBg = toRgb(app.opts.colors.selectionBackground)
+  app.rd.shaping = app.opts.fontShaping
 
 proc newTab(app: App, cwd = "", command: seq[string] = @[]): Tab =
   ## A terminal plus a child on a pty, sized to the current window, running

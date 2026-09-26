@@ -4,6 +4,7 @@
 ##
 ##   font "JetBrains Mono"
 ##   font-size 13
+##   font-shaping #false        // no ligatures or contextual alternates
 ##   cols 120
 ##   rows 36
 ##   scrollback 50000
@@ -55,12 +56,13 @@ type
     command*: seq[string]
     workingDirectory*: string   ## where the first tab starts; "" = inherit
     inheritDirectory*: bool     ## new tabs start in the current tab's directory
+    fontShaping*: bool          ## ligatures and contextual alternates
     colors*: Colors
     keybinds*: Keybinds
 
 proc defaultConfig*(): Config =
   Config(size: 14, cols: 100, rows: 30, scrollback: 10_000,
-         inheritDirectory: true, keybinds: defaultKeybinds())
+         inheritDirectory: true, fontShaping: true, keybinds: defaultKeybinds())
 
 proc configPath*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME")
@@ -177,6 +179,7 @@ proc parseConfig*(text: string, path = "config.kdl", ok: var bool): Config =
     case n.name
     of "font": result.font = strArg()
     of "font-size": result.size = intArg(4, 200)
+    of "font-shaping": result.fontShaping = boolArg()
     of "cols": result.cols = intArg(10, 1000)
     of "rows": result.rows = intArg(2, 1000)
     of "scrollback": result.scrollback = intArg(0, 10_000_000)
