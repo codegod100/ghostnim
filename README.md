@@ -126,6 +126,8 @@ ghostnim [options] [-e command [args...]]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
   -d, --working-directory DIR  start the first tab in DIR  [current directory]
+      --no-inherit-directory   start new tabs in the working directory too,
+                         not in the current tab's directory
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
 ```
@@ -147,6 +149,7 @@ rows 36
 scrollback 50000
 command "fish" "--login"
 working-directory "~/code"
+inherit-directory #false     // new tabs start in working-directory too
 
 colors {
   foreground "#c0caf5"
@@ -177,9 +180,9 @@ Keybindings add to the defaults listed under Features (use
 the file doesn't exist yet it's created from `docs/config.kdl` first.
 
 The config reloads itself when you save it, or on Ctrl+Shift+, (comma). Font,
-colours, keybindings and scrollback change in the open window; `command` and
-`working-directory` apply to new tabs, and `cols`/`rows` only size the first
-window. A file that doesn't parse is skipped and the previous settings stay.
+colours, keybindings and scrollback change in the open window; `command`,
+`working-directory` and `inherit-directory` apply to new tabs, and
+`cols`/`rows` only size the first window. A file that doesn't parse is skipped and the previous settings stay.
 
 [`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
 what it does, so it's a good starting point to copy.

@@ -9,6 +9,7 @@
 ##   scrollback 50000
 ##   command "fish" "--login"
 ##   working-directory "~/code"
+##   inherit-directory #false   // new tabs start in working-directory too
 ##
 ## Colours go in a `colors` block, as "#rrggbb" or "#rgb":
 ##
@@ -53,12 +54,13 @@ type
     scrollback*: int
     command*: seq[string]
     workingDirectory*: string   ## where the first tab starts; "" = inherit
+    inheritDirectory*: bool     ## new tabs start in the current tab's directory
     colors*: Colors
     keybinds*: Keybinds
 
 proc defaultConfig*(): Config =
   Config(size: 14, cols: 100, rows: 30, scrollback: 10_000,
-         keybinds: defaultKeybinds())
+         inheritDirectory: true, keybinds: defaultKeybinds())
 
 proc configPath*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME")
@@ -167,6 +169,10 @@ proc parseConfig*(text: string, path = "config.kdl", ok: var bool): Config =
       if v.kind != kInt: bad("expected a whole number, got " & $v)
       if v.num < lo or v.num > hi: bad("must be between " & $lo & " and " & $hi)
       v.num.int
+    template boolArg(): bool =
+      let v = oneArg()
+      if v.kind != kBool: bad("expected #true or #false, got " & $v)
+      v.bval
 
     case n.name
     of "font": result.font = strArg()
@@ -186,6 +192,7 @@ proc parseConfig*(text: string, path = "config.kdl", ok: var bool): Config =
       let dir = expandTilde(strArg())
       if not dirExists(dir): bad("no such directory: " & dir)
       result.workingDirectory = dir
+    of "inherit-directory": result.inheritDirectory = boolArg()
     of "keybinds": result.keybinds.parseKeybinds(n, path)
     of "colors":
       if n.args.len != 0 or n.props.len != 0:

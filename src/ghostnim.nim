@@ -23,6 +23,8 @@ Options:
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
   -d, --working-directory DIR  start the first tab in DIR  [current directory]
+      --no-inherit-directory   start new tabs in the working directory too,
+                         not in the current tab's directory
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
   -h, --help             show this help
@@ -42,7 +44,7 @@ Right-click opens a menu with copy, paste, select all, zoom and Open Config
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
 `scrollback 50000`, `command "fish" "--login"`, `working-directory "~/code"`,
-plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
+`inherit-directory #false`, plus `colors { ... }` and `keybinds { ... }` blocks. The command line wins.
 """
 
 type
@@ -53,6 +55,7 @@ type
     size, cols, rows: int
     scrollback: int          ## -1 when not given
     command: seq[string]
+    noInheritDirectory: bool
 
   Options = object
     font: string
@@ -61,6 +64,7 @@ type
     scrollback: int
     command: seq[string]
     workingDirectory: string
+    inheritDirectory: bool
     colors: Colors
     keybinds: Keybinds
     screenshot: string
@@ -224,6 +228,7 @@ proc parseCli(): Cli =
       result.workingDirectory = expandTilde(need(i))
       if not dirExists(result.workingDirectory):
         quit("ghostnim: no such directory: " & result.workingDirectory, 2)
+    of "--no-inherit-directory": result.noInheritDirectory = true
     of "--screenshot": result.screenshot = need(i)
     of "-e", "--exec":
       result.command = args[i + 1 .. ^1]
@@ -243,6 +248,7 @@ proc merge(cfg: Config, cli: Cli): Options =
     scrollback: pick(cli.scrollback >= 0, scrollback),
     command: pick(cli.command.len > 0, command),
     workingDirectory: pick(cli.workingDirectory.len > 0, workingDirectory),
+    inheritDirectory: cfg.inheritDirectory and not cli.noInheritDirectory,
     colors: cfg.colors, keybinds: cfg.keybinds, screenshot: cli.screenshot)
   if result.command.len == 0: result.command = @[defaultShell()]
 
@@ -318,8 +324,10 @@ proc activate(app: App, i: int) =
   app.updateWindowTitle()
 
 proc addTab(app: App, command: seq[string] = @[]) =
-  ## Open a tab next to the current one, in the current tab's directory.
-  let tab = app.newTab(app.cur.pty.cwd, command)
+  ## Open a tab next to the current one, in the current tab's directory
+  ## (or in working-directory, with inherit-directory off).
+  let cwd = if app.opts.inheritDirectory: app.cur.pty.cwd else: ""
+  let tab = app.newTab(cwd, command)
   app.tabs.insert(tab, app.active + 1)
   app.activate(app.active + 1)
 
