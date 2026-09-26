@@ -5,7 +5,7 @@
 ## them into a persistent grid texture. Only rows libghostty marks dirty are
 ## redrawn; the cursor and the tab bar are composited on top every frame.
 
-import std/[tables, osproc, strutils, os]
+import std/[tables, osproc, strutils, os, strtabs]
 from std/unicode import runes, runeLen, runeSubStr, `$`
 import vt, sdl, boxdraw
 
@@ -17,9 +17,9 @@ type
     tex: TexturePtr
     w, h: cint
 
-  Rgb = object
+  Rgb* = object
     ## Plain Nim colour; C structs are kept out of GC'd objects.
-    r, g, b: uint8
+    r*, g*, b*: uint8
 
   CellInfo = object
     text: string
@@ -58,17 +58,55 @@ type
     colors*: GhosttyRenderStateColors
     focused*: bool
 
-proc rgb(c: GhosttyColorRgb): Rgb {.inline.} = Rgb(r: c.r, g: c.g, b: c.b)
+proc rgb*(c: GhosttyColorRgb): Rgb {.inline.} = Rgb(r: c.r, g: c.g, b: c.b)
 
 proc check(res: GhosttyResult, what: string) =
   if res != GHOSTTY_SUCCESS:
     raise newException(CatchableError, what & " failed: " & $res)
 
+# The AppImage bundles fc-match/fc-list next to the binary, plus fonts and a
+# fontconfig config (system config + the bundled font dir) under share/.
+proc bundledShare(): string = getAppDir() / ".." / "share" / "ghostnim"
+
+proc bundledFonts(): seq[string] =
+  ## Font files shipped in the AppImage (empty for a normal build).
+  let dir = bundledShare() / "fonts"
+  if dirExists(dir):
+    for f in walkDirRec(dir):
+      if f.endsWith(".ttf") or f.endsWith(".otf"): result.add f
+
+proc fcRun(tool, args: string): tuple[output: string, exitCode: int] =
+  ## Run a fontconfig tool, preferring the bundled one and bundled config.
+  let bundled = getAppDir() / tool
+  let exe = if fileExists(bundled): quoteShell(bundled) else: tool
+  var env: StringTableRef = nil
+  let conf = bundledShare() / "fonts.conf"
+  if fileExists(conf) and not existsEnv("FONTCONFIG_FILE"):
+    env = newStringTable()
+    for k, v in envPairs(): env[k] = v
+    env["FONTCONFIG_FILE"] = conf
+  execCmdEx(exe & " " & args, {poStdErrToStdOut, poUsePath}, env)
+
 proc fcMatch(pattern: string): string =
   ## Ask fontconfig for the best font file matching `pattern`.
   try:
-    let (output, code) = execCmdEx("fc-match -f '%{file}' " & quoteShell(pattern))
+    let (output, code) = fcRun("fc-match", "-f '%{file}' " & quoteShell(pattern))
     if code == 0 and fileExists(output.strip): result = output.strip
+  except OSError:
+    discard
+
+proc fcList(pattern: string): seq[string] =
+  ## Font files matching `pattern`, monospace ones first.
+  try:
+    let (output, code) = fcRun("fc-list", "-f '%{spacing}\\t%{file}\\n' " & quoteShell(pattern))
+    if code != 0: return
+    var mono: seq[string]
+    for line in output.splitLines:
+      let parts = line.split('\t', 1)
+      if parts.len != 2 or not fileExists(parts[1]): continue
+      # fontconfig spacing: 100 = mono, 110 = charcell
+      if parts[0] in ["100", "110"]: mono.add parts[1] else: result.add parts[1]
+    result = mono & result
   except OSError:
     discard
 
@@ -86,7 +124,8 @@ proc resolveFonts*(primary: string): array[Face, string] =
   if result[faceRegular].len == 0:
     for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
               "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-              "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"]:
+              "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+              bundledShare() / "fonts" / "dejavu" / "DejaVuSansMono.ttf"]:
       if fileExists(p):
         result[faceRegular] = p
         break
@@ -199,12 +238,25 @@ proc fontFor(rd: Renderer, face: Face, text: string): FontPtr =
     let f = rd.fallbackForCp[cp]
     return if f != nil: f else: result
   var found: FontPtr = nil
-  let file = fcMatch("monospace:charset=" & toHex(cp.int, 4).toLowerAscii)
-  if file.len > 0 and file != rd.fontPaths[faceRegular]:
+  # Not `toHex(cp, 4)`: that truncates codepoints above U+FFFF (e.g. Nerd
+  # Font's Material Design icons at U+F0000+) and asks for the wrong char.
+  let charset = toHex(cp.int, if cp > 0xFFFF: 6 else: 4).toLowerAscii
+  # fc-match always returns *some* font, even one lacking the glyph, so fall
+  # back to every font fontconfig says covers it.
+  var candidates = @[fcMatch("monospace:charset=" & charset)] & fcList(":charset=" & charset)
+  # Private Use Area glyphs mean whatever each font says, and prompts expect
+  # Nerd Font icons there, so prefer the bundled Nerd Font for them. Otherwise
+  # bundled fonts come last, for hosts where fontconfig is missing or broken.
+  let pua = cp in 0xE000'u32 .. 0xF8FF'u32 or cp >= 0xF0000'u32
+  candidates = if pua: bundledFonts() & candidates else: candidates & bundledFonts()
+  for file in candidates:
+    if file.len == 0 or file == rd.fontPaths[faceRegular]: continue
     if file notin rd.fallbackByFile:
       rd.fallbackByFile[file] = openFont(file.cstring, cint(float(rd.fontSize) * rd.scale + 0.5))
     let f = rd.fallbackByFile[file]
-    if f != nil and glyphIsProvided32(f, cp) != 0: found = f
+    if f != nil and glyphIsProvided32(f, cp) != 0:
+      found = f
+      break
   rd.fallbackForCp[cp] = found
   if found != nil: result = found
 
@@ -224,12 +276,26 @@ proc glyph(rd: Renderer, text: string, face: Face): Glyph =
 
 # --- drawing helpers -------------------------------------------------------
 
-proc setColor(rd: Renderer, c: Rgb, a = 255'u8) =
+proc setColor*(rd: Renderer, c: Rgb, a = 255'u8) =
   discard setRenderDrawColor(rd.r, c.r, c.g, c.b, a)
 
-proc fillRect(rd: Renderer, x, y, w, h: int) =
+proc fillRect*(rd: Renderer, x, y, w, h: int) =
   var rect = Rect(x: cint(x), y: cint(y), w: cint(w), h: cint(h))
   discard renderFillRect(rd.r, addr rect)
+
+proc textWidth*(rd: Renderer, text: string): int =
+  ## Width in output pixels of `text` drawn in the regular face.
+  if text.len == 0: 0 else: rd.glyph(text, faceRegular).w.int
+
+proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
+  ## Draw a UI string (not terminal cells) with its top-left at (x, y).
+  if text.len == 0: return
+  let g = rd.glyph(text, faceRegular)
+  if g.tex == nil: return
+  var dst = Rect(x: cint(x), y: cint(y), w: g.w, h: g.h)
+  discard setTextureColorMod(g.tex, color.r, color.g, color.b)
+  discard setTextureAlphaMod(g.tex, 255)
+  discard renderCopy(rd.r, g.tex, nil, addr dst)
 
 proc cellX(rd: Renderer, col: int): int = rd.pad + col * rd.cellW
 proc cellY(rd: Renderer, row: int): int = rd.top + rd.pad + row * rd.cellH
@@ -463,7 +529,7 @@ proc hitTabBar*(rd: Renderer, n, x, y: int): TabHit =
   if x >= n * tabW and x < n * tabW + rd.top:
     return TabHit(kind: hitNew)
 
-proc drawText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceRegular) =
+proc drawCellText(rd: Renderer, text: string, x, y: int, fg: Rgb, face = faceRegular) =
   ## Draw one line of text on the cell grid (one cell per codepoint).
   var cx = x
   for r in text.runes:
@@ -506,9 +572,9 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
     var label = if title.len > 0: title else: "shell"
     if label.runeLen > maxChars:
       label = if maxChars > 1: label.runeSubStr(0, maxChars - 1) & "…" else: ""
-    rd.drawText(label, x + rd.cellW, textY, textFg, if isActive: faceBold else: faceRegular)
-    rd.drawText("×", x + tabW - closeW + (closeW - rd.cellW) div 2, textY, textFg)
-  rd.drawText("+", n * tabW + (rd.top - rd.cellW) div 2, textY, mix(bg, fg, 0.6))
+    rd.drawCellText(label, x + rd.cellW, textY, textFg, if isActive: faceBold else: faceRegular)
+    rd.drawCellText("×", x + tabW - closeW + (closeW - rd.cellW) div 2, textY, textFg)
+  rd.drawCellText("+", n * tabW + (rd.top - rd.cellW) div 2, textY, mix(bg, fg, 0.6))
   rd.setColor(mix(bg, fg, 0.2))
   let activeX = active * tabW
   rd.fillRect(0, rd.top - line, activeX, line)

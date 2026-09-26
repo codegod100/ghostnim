@@ -29,6 +29,9 @@ the event loop.
   SGR and more). Hold Shift to select instead.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
   with bracketed paste.
+- Right-click context menu with Copy, Paste, Select All and zoom, drawn
+  in-window and navigable with the arrow keys and Enter. When the application
+  has mouse reporting on, hold Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
 - Tabs, each with its own shell and terminal state. The tab bar shows each
   tab's OSC title. Click a tab to switch to it, click × (or middle-click the

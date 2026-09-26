@@ -208,6 +208,7 @@ const
   # GhosttyPointTag
   GHOSTTY_POINT_TAG_ACTIVE* = 0.cint
   GHOSTTY_POINT_TAG_VIEWPORT* = 1.cint
+  GHOSTTY_POINT_TAG_SCREEN* = 2.cint
 
   # GhosttyRenderStateDirty
   GHOSTTY_RENDER_STATE_DIRTY_FALSE* = 0.cint

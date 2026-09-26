@@ -208,6 +208,7 @@ proc getTicks*(): uint32 {.sdl, importc: "SDL_GetTicks".}
 
 proc setClipboardText*(text: cstring): cint {.sdl, importc: "SDL_SetClipboardText".}
 proc getClipboardText*(): cstring {.sdl, importc: "SDL_GetClipboardText".}
+proc hasClipboardText*(): cint {.sdl, importc: "SDL_HasClipboardText".}
 proc sdlFree*(p: pointer) {.sdl, importc: "SDL_free".}
 
 proc atomicSet*(a: ptr AtomicInt, v: cint): cint {.sdl, importc: "SDL_AtomicSet", discardable.}
