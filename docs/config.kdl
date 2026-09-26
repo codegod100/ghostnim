@@ -11,9 +11,10 @@
 // stderr and skipped; the rest of the file still applies.
 //
 // Changes apply as soon as you save the file (or press Ctrl+Shift+, to
-// reload by hand). cols and rows only size the first window, and command and
-// working-directory apply to tabs opened afterwards. If the file doesn't parse,
-// the reload is skipped and the previous settings stay.
+// reload by hand). cols and rows only size the first window, and command,
+// working-directory and inherit-directory apply to tabs opened afterwards.
+// If the file doesn't parse, the reload is skipped and the previous settings
+// stay.
 //
 // The syntax is KDL (https://kdl.dev): `name value`, one per line. `//`
 // starts a comment, and `/-` in front of a setting comments out all of it.
@@ -48,9 +49,16 @@ scrollback 10000
 /-command "fish" "--login"
 
 // Directory the first tab starts in. `~` means your home directory. New tabs
-// open in the current tab's directory. Default: the directory ghostnim was
-// launched from. Command line: -d, --working-directory.
+// open in the current tab's directory, unless inherit-directory is #false.
+// Default: the directory ghostnim was launched from.
+// Command line: -d, --working-directory.
 /-working-directory "~"
+
+// Whether new tabs open in the current tab's directory. Set it to #false to
+// start every new tab in working-directory instead (or, if that isn't set,
+// the directory ghostnim was launched from). Default: #true.
+// Command line: --no-inherit-directory.
+inherit-directory #true
 
 // --- Colors ----------------------------------------------------------------
 
