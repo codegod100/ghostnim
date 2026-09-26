@@ -22,6 +22,7 @@ type
     stamp: Time               ## the folder's mtime when it was listed
     scroll*: int              ## first entry shown
     hovered*, selected*: int  ## entry indexes, -1 for none
+    showHidden*: bool         ## list dotfiles too
 
 proc initFilePane*(): FilePane = FilePane(hovered: -1, selected: -1)
 
@@ -30,12 +31,15 @@ proc initFilePane*(): FilePane = FilePane(hovered: -1, selected: -1)
 proc mtime(dir: string): Time =
   try: getLastModificationTime(dir) except OSError: Time()
 
-proc list(dir: string): seq[Entry] =
-  ## The folder's visible entries: folders first, each group by name.
+proc isHidden*(e: Entry): bool = e.name.startsWith(".") and e.name != ".."
+
+proc list(dir: string, hidden: bool): seq[Entry] =
+  ## The folder's entries, dotfiles only if `hidden`: folders first, each
+  ## group by name.
   var dirs, files: seq[Entry]
   try:
     for kind, name in walkDir(dir, relative = true):
-      if name.startsWith("."): continue
+      if name.startsWith(".") and not hidden: continue
       if kind in {pcDir, pcLinkToDir}: dirs.add Entry(name: name, isDir: true)
       else: files.add Entry(name: name)
       if dirs.len + files.len >= maxEntries: break
@@ -60,9 +64,17 @@ proc load*(p: var FilePane, dir: string) =
     p.hovered = -1
   p.dir = dir
   p.stamp = mtime(dir)
-  p.entries = list(dir)
+  p.entries = list(dir, p.showHidden)
   p.scroll = min(p.scroll, max(0, p.entries.len - 1))
   if p.selected >= p.entries.len: p.selected = -1
+
+proc reload(p: var FilePane) =
+  ## List the folder again, keeping the selection on the same name.
+  let selName = if p.selected >= 0: p.entries[p.selected].name else: ""
+  p.load(p.dir)
+  p.selected = -1
+  for i, e in p.entries:
+    if e.name == selName: p.selected = i
 
 proc refresh*(p: var FilePane) =
   ## List the folder again if something was added, removed or renamed in it.
@@ -72,11 +84,13 @@ proc refresh*(p: var FilePane) =
     while up.len > 1 and not dirExists(up): up = up.parentDir
     p.load(up)
   elif mtime(p.dir) != p.stamp:
-    let selName = if p.selected >= 0: p.entries[p.selected].name else: ""
-    p.load(p.dir)
-    p.selected = -1
-    for i, e in p.entries:
-      if e.name == selName: p.selected = i
+    p.reload()
+
+proc setShowHidden*(p: var FilePane, on: bool) =
+  ## List dotfiles or not, keeping the selected entry if it's still there.
+  if on == p.showHidden: return
+  p.showHidden = on
+  if p.dir.len > 0: p.reload()
 
 # --- geometry ------------------------------------------------------------------
 
@@ -212,11 +226,12 @@ proc draw*(p: FilePane, rd: Renderer, outH: int, focused: bool) =
                   else: mix(bg, fg, if i == p.selected: 0.16 else: 0.08))
       rd.fillRect(0, y, rd.left, rd.rowH)
     let iy = y + (rd.rowH - iconH) div 2
-    if e.isDir: rd.drawFolderIcon(rd.padX, iy, iconW, iconH, mix(bg, accent, 0.85))
+    let dim = if e.isHidden: 0.6 else: 1.0     # dotfiles are drawn fainter
+    if e.isDir: rd.drawFolderIcon(rd.padX, iy, iconW, iconH, mix(bg, accent, 0.85 * dim))
     else: rd.drawFileIcon(rd.padX + iconW div 8, iy - iconH div 6, iconW,
-                          iconH + iconH div 3, mix(bg, fg, 0.45))
-    rd.drawText(fit(e.name, nameChars), nameX, y + rd.padY,
-                if e.isDir or i == p.selected: fg else: mix(bg, fg, 0.75))
+                          iconH + iconH div 3, mix(bg, fg, max(0.35, 0.45 * dim)))
+    let textT = if e.isDir or i == p.selected: 1.0 else: 0.75
+    rd.drawText(fit(e.name, nameChars), nameX, y + rd.padY, mix(bg, fg, textT * dim))
 
   # Scrollbar, when not everything fits.
   if p.entries.len > rows and rows > 0:

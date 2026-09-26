@@ -75,9 +75,11 @@ the event loop.
   there on its own), double-click a file to open it with `xdg-open`,
   middle-click a file to type its quoted path into the terminal, or
   middle-click a folder to open a new tab in it. The listing updates when
-  files are added or removed; hidden files are left out. Drag the divider to
-  resize the pane; whether it's shown and its width are remembered in
-  `$XDG_STATE_HOME/ghostnim`.
+  files are added or removed. Hidden files (dotfiles) are left out until you
+  press Ctrl+H in the pane or pick Show Hidden Files from the right-click
+  menu; then they're listed, drawn fainter. Drag the divider to resize the
+  pane; whether it's shown, its width and whether it lists hidden files are
+  remembered in `$XDG_STATE_HOME/ghostnim`.
   Showing the pane gives it the keyboard (its selection turns the accent
   colour and the terminal's cursor goes hollow): Up/Down, PageUp/PageDown
   and Home/End move, Enter or Right goes into a folder or opens a file,
@@ -232,7 +234,7 @@ Keybindings add to the defaults listed under Features (use
 `paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
 `goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
 `scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
-`send-text "..."`, `reload-config`, `open-config`, `toggle-file-pane` and `none`.
+`send-text "..."`, `reload-config`, `open-config`, `toggle-file-pane`, `toggle-hidden-files` and `none`.
 
 **Open Config** in the right-click menu (or Ctrl+,) opens the file in
 `$VISUAL`/`$EDITOR` in a new tab, or with `xdg-open` if neither is set. If

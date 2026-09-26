@@ -142,6 +142,8 @@ copy-on-select #true
 //   open-config             edit this file ($VISUAL/$EDITOR in a new tab)
 //   toggle-file-pane        show and focus the file manager left of the
 //                           terminal; focus it if shown, hide it if focused
+//   toggle-hidden-files     list dotfiles in the file manager, or stop
+//                           (unbound by default; Ctrl+H in the focused pane)
 //   none                    unbind the chord
 keybinds {
   ctrl+shift+c copy

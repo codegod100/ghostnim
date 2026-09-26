@@ -33,6 +33,7 @@ type
     acReloadConfig = "reload-config"
     acOpenConfig = "open-config"
     acToggleFilePane = "toggle-file-pane"
+    acToggleHiddenFiles = "toggle-hidden-files"   ## in the file pane
 
   Mod* = enum mCtrl, mShift, mAlt, mSuper
 

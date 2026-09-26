@@ -63,8 +63,8 @@ lists the current tab's folder: click a folder to cd there, double-click a
 file to open it, middle-click a file to type its path into the terminal (or a
 folder to open a new tab there), and drag the divider to resize it. While it
 has focus: arrows, PageUp/PageDown and Home/End move, Enter opens, Left or
-Backspace goes up, typing jumps to a name, Shift+Enter types the path into
-the terminal and Escape returns to it.
+Backspace goes up, typing jumps to a name, Ctrl+H shows or hides dotfiles,
+Shift+Enter types the path into the terminal and Escape returns to it.
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
@@ -707,22 +707,25 @@ proc toggleFolderBar(app: App) =
 # --- file manager pane ---------------------------------------------------------
 
 proc filePaneFile(): string = stateDir() / "file-pane"
-  ## "on WIDTH" or "off WIDTH": whether the file pane is shown, and how wide.
+  ## "on WIDTH" or "off WIDTH", plus "hidden" when it lists dotfiles:
+  ## whether the file pane is shown, how wide, and what it lists.
 
 proc loadPaneState(app: App) =
   app.paneW = defaultPaneWidth
   try:
     let parts = readFile(filePaneFile()).splitWhitespace
-    if parts.len == 2:
+    if parts.len >= 2:
       app.paneOn = parts[0] == "on"
       app.paneW = max(1, parseInt(parts[1]))
+      app.pane.showHidden = "hidden" in parts[2 .. ^1]
   except IOError, OSError, ValueError:
     discard
 
 proc savePaneState(app: App) =
   try:
     createDir(stateDir())
-    writeFile(filePaneFile(), (if app.paneOn: "on " else: "off ") & $app.paneW & "\n")
+    writeFile(filePaneFile(), (if app.paneOn: "on " else: "off ") & $app.paneW &
+                              (if app.pane.showHidden: " hidden" else: "") & "\n")
   except OSError, IOError:
     stderr.writeLine "ghostnim: can't save the file manager setting: " &
                      getCurrentExceptionMsg().splitLines[0]
@@ -779,6 +782,14 @@ proc paneOpenDir(app: App, dir: string) =
     app.sendInput("cd " & quoteShell(dir) & "\r")
   app.pane.load(dir)
 
+proc toggleHiddenFiles(app: App) =
+  ## List dotfiles in the file pane, or stop listing them.
+  let (_, h) = app.outputSize()
+  app.pane.setShowHidden(not app.pane.showHidden)
+  if app.pane.selected >= 0: app.pane.select(app.pane.selected, app.rd.visibleRows(h))
+  app.pane.scrollBy(app.rd, 0, h)   # keep the list's end at the bottom
+  app.savePaneState()
+
 proc paneRows(app: App): int = app.rd.visibleRows(app.outputSize()[1])
 
 proc paneOpen(app: App) =
@@ -827,6 +838,9 @@ proc paneKey(app: App, e: KeyboardEvent) =
     if sel >= 0 and app.pane.entries[sel].isDir: app.paneOpen()
   of gkArrowLeft, gkBackspace: app.paneUp()
   of gkEscape: app.focusPane(false)
+  of gkH:
+    if (e.keysym.`mod` and KMOD_CTRL) == 0: return   # type-ahead
+    app.toggleHiddenFiles()
   else: return
   app.typeAhead = ""
 
@@ -880,6 +894,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maOpenConfig: app.openConfig()
   of maToggleFolderBar: app.toggleFolderBar()
   of maToggleFilePane: app.toggleFilePane()
+  of maToggleHiddenFiles: app.toggleHiddenFiles()
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -923,6 +938,7 @@ proc runAction(app: App, b: Binding) =
   of acReloadConfig: app.reloadConfig()
   of acOpenConfig: app.openConfig()
   of acToggleFilePane: app.toggleFilePane(focusFirst = true)
+  of acToggleHiddenFiles: app.toggleHiddenFiles()
 
 proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
   ## Keybindings from the config (or the defaults). True if the key was used.
@@ -1225,6 +1241,11 @@ proc openMenu(app: App, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let (w, h) = app.outputSize()
   let kb = app.opts.keybinds
+  var paneItems: seq[MenuItem]
+  if app.paneOn:
+    let hiddenKey = kb.shortcutLabel(acToggleHiddenFiles)
+    paneItems.add item(if app.pane.showHidden: "Hide Hidden Files" else: "Show Hidden Files",
+                       maToggleHiddenFiles, if hiddenKey.len > 0: hiddenKey else: "Ctrl+H")
   app.menu.show(app.rd, @[
     item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
     item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
@@ -1237,7 +1258,7 @@ proc openMenu(app: App, x, y: int32) =
     item(if app.rd.folderBar: "Hide Recent Folders" else: "Show Recent Folders",
          maToggleFolderBar),
     item(if app.paneOn: "Hide File Manager" else: "Show File Manager",
-         maToggleFilePane, kb.shortcutLabel(acToggleFilePane)),
+         maToggleFilePane, kb.shortcutLabel(acToggleFilePane))] & paneItems & @[
     item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
   ], int(px), int(py), w, h)
 
