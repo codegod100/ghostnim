@@ -43,9 +43,10 @@ the event loop.
   even when they wrap onto the next line. The pointer turns into a hand over
   a link while Ctrl is held. It works when the application has mouse
   reporting on, too.
-- Right-click context menu with Copy, Paste, Select All, zoom and Open
-  Config, drawn in-window and navigable with the arrow keys and Enter. When
-  the application has mouse reporting on, hold Shift to open it.
+- Right-click context menu with Copy, Paste, Select All, zoom, Show/Hide
+  Recent Folders and Open Config, drawn in-window and navigable with the
+  arrow keys and Enter. When the application has mouse reporting on, hold
+  Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
 - Tabs, each with its own shell and terminal state. The tab bar shows each
   tab's OSC title. Click a tab to switch to it, click × (or middle-click the
@@ -53,6 +54,13 @@ the event loop.
   also switches tabs. New tabs start in the current tab's directory.
   Keys: Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Tab /
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
+- Recent folders: a strip under the tabs shows the last five directories the
+  current tab has been in, most recent first. Each tab keeps its own list
+  (a new tab starts with a copy of its parent's). Click one to `cd` there, or
+  middle-click it to open it in a new tab; if a program is running in the
+  tab, a click opens a new tab too. Turn the strip on or off from the
+  right-click menu; the choice is remembered in
+  `$XDG_STATE_HOME/ghostnim` (`~/.local/state/ghostnim`).
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours

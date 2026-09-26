@@ -8,7 +8,8 @@ import sdl, renderer
 type
   MenuAction* = enum
     maNone,       ## separators
-    maCopy, maPaste, maSelectAll, maZoomIn, maZoomOut, maZoomReset, maOpenConfig
+    maCopy, maPaste, maSelectAll, maZoomIn, maZoomOut, maZoomReset, maOpenConfig,
+    maToggleFolderBar
 
   MenuItem* = object
     label*, shortcut*: string

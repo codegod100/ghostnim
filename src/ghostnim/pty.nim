@@ -93,3 +93,8 @@ proc childExited*(p: Pty): bool =
 proc close*(p: Pty) =
   discard posix.close(p.fd)
   discard kill(p.pid, SIGHUP)
+
+proc atPrompt*(p: Pty): bool =
+  ## Whether the child itself (normally the shell) is in the foreground,
+  ## rather than a program it started.
+  tcgetpgrp(p.fd) == p.pid

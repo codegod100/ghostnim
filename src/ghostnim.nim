@@ -11,6 +11,8 @@ import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, 
 const
   version = "0.1.0"
   blinkIntervalMs = 600'u32
+  shownRecentDirs = 5      ## folders in the strip under the tabs
+  keptRecentDirs = 30      ## history kept per tab
   usage = """
 ghostnim """ & version & """ - a Nim terminal powered by libghostty-vt
 
@@ -47,8 +49,9 @@ as it's made.
 
 Ctrl+click a link (an OSC 8 hyperlink or a URL in the text) to open it.
 
-Right-click opens a menu with copy, paste, select all, zoom and Open Config
-(hold Shift to open it when the application has mouse reporting on).
+Right-click opens a menu with copy, paste, select all, zoom, show/hide recent
+folders and Open Config (hold Shift to open it when the application has mouse
+reporting on). Click a recent folder under the tabs to cd there.
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
@@ -101,6 +104,7 @@ type
     state: GhosttyRenderState
     title: string
     titleChanged: bool
+    dirs: seq[string]         ## directories visited, most recent (current) first
     watch: ptr PtyWatch
     thread: ptr SdlThread
 
@@ -142,7 +146,9 @@ type
     lastMouseCell: (int, int)
     menu: ContextMenu
     arrowCursor, handCursor: ptr SdlCursor
-    overLink: bool             ## the pointer shows the hand for a link
+    overLink: bool             ## the pointer shows the hand for a link or folder
+    dirsChecked: uint32        ## ticks of the last look at the tabs' directories
+    folderHover: int           ## recent-folder chip under the pointer, -1 for none
 
 proc cur(app: App): Tab {.inline.} = app.tabs[app.active]
 
@@ -366,11 +372,15 @@ proc activate(app: App, i: int) =
   app.needsFull = true
   app.updateWindowTitle()
 
-proc addTab(app: App, command: seq[string] = @[]) =
-  ## Open a tab next to the current one, in the current tab's directory
-  ## (or in working-directory, with inherit-directory off).
-  let cwd = if app.opts.inheritDirectory: app.cur.pty.cwd else: ""
+proc addTab(app: App, command: seq[string] = @[], dir = "") =
+  ## Open a tab next to the current one, in `dir` if given, else in the
+  ## current tab's directory (or in working-directory, with
+  ## inherit-directory off). It starts with the current tab's recent folders.
+  let cwd = if dir.len > 0: dir
+            elif app.opts.inheritDirectory: app.cur.pty.cwd
+            else: ""
   let tab = app.newTab(cwd, command)
+  tab.dirs = app.cur.dirs
   app.tabs.insert(tab, app.active + 1)
   app.activate(app.active + 1)
 
@@ -598,6 +608,67 @@ proc checkConfigChanged(app: App) =
   if stamp(configFile(app.cli.configPath)) != app.configStamp:
     app.reloadConfig()
 
+# --- recent folders -----------------------------------------------------------
+
+proc stateDir(): string =
+  let xdg = getEnv("XDG_STATE_HOME")
+  (if xdg.isAbsolute: xdg else: getHomeDir() / ".local" / "state") / "ghostnim"
+
+proc folderBarHiddenFlag(): string = stateDir() / "folder-bar-hidden"
+  ## Exists while the recent-folders strip is turned off.
+
+proc trackDirs(app: App) =
+  ## Note each tab's working directory (a few times a second at most), so its
+  ## recent folders follow it around.
+  let now = getTicks()
+  if now - app.dirsChecked < 250: return
+  app.dirsChecked = now
+  for tab in app.tabs:
+    let dir = tab.pty.cwd
+    if dir.len == 0 or (tab.dirs.len > 0 and tab.dirs[0] == dir): continue
+    let i = tab.dirs.find(dir)
+    if i >= 0: tab.dirs.delete(i)
+    tab.dirs.insert(dir, 0)
+    if tab.dirs.len > keptRecentDirs: tab.dirs.setLen(keptRecentDirs)
+
+proc recentDirs(app: App): seq[string] =
+  ## The current tab's recent folders, not counting the one it's in.
+  let dirs = app.cur.dirs
+  if dirs.len > 1: dirs[1 .. min(shownRecentDirs, dirs.len - 1)] else: @[]
+
+proc folderLabel(dir: string): string =
+  if dir == getHomeDir().strip(leading = false, chars = {'/'}): "~"
+  elif dir == "/": "/"
+  else: dir.lastPathPart
+
+proc folderLabels(app: App): seq[string] = app.recentDirs.map(folderLabel)
+
+proc goToDir(app: App, dir: string, newTab = false) =
+  ## cd the current tab's shell into `dir`, or, if a program is running in
+  ## it (or `newTab`), open a new tab there.
+  if not dirExists(dir):
+    let i = app.cur.dirs.find(dir)
+    if i >= 0: app.cur.dirs.delete(i)
+    return
+  if newTab or not app.cur.pty.atPrompt:
+    app.addTab(dir = dir)
+  else:
+    app.sendInput("cd " & quoteShell(dir) & "\r")
+
+proc toggleFolderBar(app: App) =
+  let on = not app.rd.folderBar
+  app.rd.setFolderBar(on)
+  app.folderHover = -1
+  app.applySize()
+  try:
+    if on: removeFile(folderBarHiddenFlag())
+    else:
+      createDir(stateDir())
+      writeFile(folderBarHiddenFlag(), "")
+  except OSError, IOError:
+    stderr.writeLine "ghostnim: can't save the folder bar setting: " &
+                     getCurrentExceptionMsg().splitLines[0]
+
 # --- context menu -----------------------------------------------------------
 
 proc runMenuAction(app: App, action: MenuAction) =
@@ -611,6 +682,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maZoomOut: app.zoom(app.rd.fontSize - 1)
   of maZoomReset: app.zoom(app.opts.size)
   of maOpenConfig: app.openConfig()
+  of maToggleFolderBar: app.toggleFolderBar()
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -845,21 +917,30 @@ proc linkModifier(): bool =
   (getModState() and (KMOD_CTRL or KMOD_GUI)) != 0
 
 proc updateLinkCursor(app: App) =
-  ## Show a hand while Ctrl is held over a link.
+  ## Show a hand while Ctrl is held over a link, and over a recent folder.
   if app.tabs.len == 0: return   # the last tab just closed
   var x, y: cint
   discard getMouseState(addr x, addr y)
-  var over = linkModifier() and not app.menu.open and not app.selecting and
-             app.ownButtons.len == 0 and not app.inTabBar(y)
-  if over:
-    let (c, r) = app.cellAt(x, y)
-    over = app.linkAt(c, r).len > 0
+  var over = false
+  if not app.menu.open and not app.selecting and app.ownButtons.len == 0:
+    if app.inTabBar(y):
+      let (px, py) = app.pixelPos(x, y)
+      over = app.rd.hitFolderBar(app.folderLabels, px.int, py.int) >= 0
+    elif linkModifier():
+      let (c, r) = app.cellAt(x, y)
+      over = app.linkAt(c, r).len > 0
   if over != app.overLink:
     app.overLink = over
     setCursor(if over: app.handCursor else: app.arrowCursor)
 
 proc onTabBarClick(app: App, button, clicks: uint8, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
+  if py.int >= app.rd.tabH:
+    # The recent-folders strip: click to go there, middle-click for a new tab.
+    let i = app.rd.hitFolderBar(app.folderLabels, px.int, py.int)
+    if i >= 0 and button in {BUTTON_LEFT, BUTTON_MIDDLE}:
+      app.goToDir(app.recentDirs[i], newTab = button == BUTTON_MIDDLE)
+    return
   let hit = app.rd.hitTabBar(app.tabs.len, px.int, py.int)
   case hit.kind
   of hitTab:
@@ -918,6 +999,8 @@ proc openMenu(app: App, x, y: int32) =
     item("Zoom Out", maZoomOut, kb.shortcutLabel(acFontSmaller)),
     item("Reset Zoom", maZoomReset, kb.shortcutLabel(acFontReset)),
     separator(),
+    item(if app.rd.folderBar: "Hide Recent Folders" else: "Show Recent Folders",
+         maToggleFolderBar),
     item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
   ], int(px), int(py), w, h)
 
@@ -968,6 +1051,10 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
   app.updateLinkCursor()
+  let (mx, my) = app.pixelPos(e.x, e.y)
+  app.folderHover =
+    if app.menu.open or app.mouseButtons.len > 0: -1
+    else: app.rd.hitFolderBar(app.folderLabels, mx.int, my.int)
   if app.menu.open:
     let (px, py) = app.pixelPos(e.x, e.y)
     app.menu.motion(app.rd, int(px), int(py))
@@ -1035,6 +1122,7 @@ proc handleEvent(app: App, e: var Event) =
       app.menu.close()
       app.applySize()
     of WINDOWEVENT_EXPOSED: app.needsFull = true
+    of WINDOWEVENT_LEAVE: app.folderHover = -1
     of WINDOWEVENT_FOCUS_GAINED, WINDOWEVENT_FOCUS_LOST:
       if e.window.event == WINDOWEVENT_FOCUS_LOST: app.menu.close()
       app.rd.focused = e.window.event == WINDOWEVENT_FOCUS_GAINED
@@ -1093,7 +1181,7 @@ proc main() =
   defer: ttfQuit()
 
   let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
-                needsFull: true)
+                needsFull: true, folderHover: -1)
   let fontPaths = resolveFonts(opts.font)
 
   # Measure the cell size first so the initial window fits cols x rows.
@@ -1110,6 +1198,7 @@ proc main() =
   let scale = if ww > 0: ow.float / ww.float else: 1.0
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
   app.applySelectionColors()
+  app.rd.setFolderBar(not fileExists(folderBarHiddenFlag()))
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))
@@ -1145,8 +1234,10 @@ proc main() =
       lastBlink = now
     if not app.running: break
     if opts.screenshot.len == 0: app.checkConfigChanged()
+    app.trackDirs()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
     app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
+    app.rd.drawFolderBar(app.folderLabels, app.folderHover)
     app.menu.draw(app.rd)
     app.needsFull = false
     if opts.screenshot.len > 0 and now - startTicks > 1500:
