@@ -11,19 +11,33 @@ const vtHeader = "ghostty/vt.h"
 {.pragma: vt, importc, header: vtHeader.}
 {.pragma: vtType, importc, header: vtHeader, bycopy.}
 {.pragma: vtSized, importc, header: vtHeader, bycopy, incompleteStruct.}
+# Opaque handle targets. Handles are `ptr` to these so the generated C uses
+# `struct GhosttyXImpl*` (matching the header typedefs) instead of `void*`;
+# GCC 14+ rejects passing `void**` where `GhosttyX*` is expected.
+{.pragma: vtOpaque, importc, header: vtHeader, incompleteStruct.}
 
 type
   GhosttyResult* = cint
 
-  GhosttyTerminal* = distinct pointer
-  GhosttyRenderState* = distinct pointer
-  GhosttyRenderStateRowIterator* = distinct pointer
-  GhosttyRenderStateRowCells* = distinct pointer
-  GhosttyKeyEncoder* = distinct pointer
-  GhosttyKeyEvent* = distinct pointer
-  GhosttyMouseEncoder* = distinct pointer
-  GhosttyMouseEvent* = distinct pointer
-  GhosttyFormatter* = distinct pointer
+  GhosttyOpaqueTerminal {.vtOpaque, importc: "struct GhosttyTerminalImpl".} = object
+  GhosttyOpaqueRenderState {.vtOpaque, importc: "struct GhosttyRenderStateImpl".} = object
+  GhosttyOpaqueRenderStateRowIterator {.vtOpaque, importc: "struct GhosttyRenderStateRowIteratorImpl".} = object
+  GhosttyOpaqueRenderStateRowCells {.vtOpaque, importc: "struct GhosttyRenderStateRowCellsImpl".} = object
+  GhosttyOpaqueKeyEncoder {.vtOpaque, importc: "struct GhosttyKeyEncoderImpl".} = object
+  GhosttyOpaqueKeyEvent {.vtOpaque, importc: "struct GhosttyKeyEventImpl".} = object
+  GhosttyOpaqueMouseEncoder {.vtOpaque, importc: "struct GhosttyMouseEncoderImpl".} = object
+  GhosttyOpaqueMouseEvent {.vtOpaque, importc: "struct GhosttyMouseEventImpl".} = object
+  GhosttyOpaqueFormatter {.vtOpaque, importc: "struct GhosttyFormatterImpl".} = object
+
+  GhosttyTerminal* = ptr GhosttyOpaqueTerminal
+  GhosttyRenderState* = ptr GhosttyOpaqueRenderState
+  GhosttyRenderStateRowIterator* = ptr GhosttyOpaqueRenderStateRowIterator
+  GhosttyRenderStateRowCells* = ptr GhosttyOpaqueRenderStateRowCells
+  GhosttyKeyEncoder* = ptr GhosttyOpaqueKeyEncoder
+  GhosttyKeyEvent* = ptr GhosttyOpaqueKeyEvent
+  GhosttyMouseEncoder* = ptr GhosttyOpaqueMouseEncoder
+  GhosttyMouseEvent* = ptr GhosttyOpaqueMouseEvent
+  GhosttyFormatter* = ptr GhosttyOpaqueFormatter
 
   GhosttyCell* = uint64
   GhosttyMods* = uint16
@@ -364,11 +378,6 @@ proc ghostty_formatter_format_alloc*(formatter: GhosttyFormatter, allocator: poi
                                      outPtr: ptr ptr uint8,
                                      outLen: ptr csize_t): GhosttyResult {.vt.}
 proc ghostty_formatter_free*(formatter: GhosttyFormatter) {.vt.}
-
-proc isNil*(p: GhosttyTerminal | GhosttyRenderState | GhosttyRenderStateRowIterator |
-            GhosttyRenderStateRowCells | GhosttyKeyEncoder | GhosttyKeyEvent |
-            GhosttyMouseEncoder | GhosttyMouseEvent | GhosttyFormatter): bool =
-  pointer(p) == nil
 
 template initSized*[T](t: typedesc[T]): T =
   ## Equivalent of GHOSTTY_INIT_SIZED(T): zeroed with `size` set.
