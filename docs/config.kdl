@@ -133,7 +133,10 @@ keybinds {
   shift+page-up scroll-page-up
   shift+page-down scroll-page-down
   "ctrl+=" font-bigger
+  "ctrl+shift+=" font-bigger
+  ctrl+numpad-add font-bigger
   ctrl+- font-smaller
+  ctrl+numpad-subtract font-smaller
   ctrl+0 font-reset
   ctrl+shift+, reload-config
   ctrl+, open-config

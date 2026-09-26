@@ -34,7 +34,7 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+Tab / Ctrl+Shift+Tab     next / previous tab (also Ctrl+PageDown/PageUp)
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
-  Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
+  Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font (also Ctrl++)
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 

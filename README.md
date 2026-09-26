@@ -40,7 +40,7 @@ the event loop.
   Keys: Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Tab /
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
-- Font zoom: Ctrl+= / Ctrl+- / Ctrl+0.
+- Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours
   and keybindings, reloaded live when saved (see [Config file](#config-file)).
 
