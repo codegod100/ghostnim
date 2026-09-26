@@ -43,6 +43,12 @@ the event loop.
   even when they wrap onto the next line. The pointer turns into a hand over
   a link while Ctrl is held. It works when the application has mouse
   reporting on, too.
+- Ctrl+click a path to open it in a new tab: a directory opens a new tab
+  there, a file opens in `$VISUAL`/`$EDITOR` in a new tab (or with
+  `xdg-open` when neither is set). Relative paths are taken from the tab's
+  directory, so the names `ls` prints work, and `src/foo.nim:12:3`,
+  git's `a/`/`b/` prefixes and `ls -F`'s `*`/`@` are understood. `file://`
+  links to directories (`ls --hyperlink`) open in a new tab too.
 - Right-click context menu with Copy, Paste, Select All, zoom, Show/Hide
   Recent Folders,
   Show/Hide File Manager and Open Config, drawn in-window and navigable with the

@@ -25,9 +25,10 @@
 // For a family, its bold and italic faces are found too. Default: "Monaspace
 // Neon Frozen" (bundled in the AppImage), else "Monaspace Neon", else
 // fontconfig's "monospace". The Frozen build has Monaspace's coding ligatures
-// switched on; plain "Monaspace Neon" only gets texture healing.
+// switched on; plain "Monaspace Neon" only gets texture healing. A family
+// that isn't installed falls back to the default. Remove the `/-` to pick one.
 // Command line: -f, --font.
-font "Monaspace Neon Frozen"
+/-font "JetBrains Mono"
 
 // Font size in points. Ctrl+= and Ctrl+- zoom, and Ctrl+0 goes back to this.
 // Default: 14. Command line: -s, --size.
