@@ -8,17 +8,40 @@
 ##   rows 36
 ##   scrollback 50000
 ##   command "fish" "--login"
+##   working-directory "~/code"
+##
+## Colours go in a `colors` block, as "#rrggbb" or "#rgb":
+##
+##   colors {
+##     foreground "#c0caf5"
+##     background "#1a1b26"
+##     cursor "#c0caf5"
+##     selection-foreground "#c0caf5"
+##     selection-background "#33467c"
+##     palette 0 "#15161e"      // one node per 256-colour palette entry
+##     palette 1 "#f7768e"
+##   }
 
-import std/[os, strutils]
+import std/[os, strutils, options]
 import kdl
 
 type
+  ConfigRgb* = tuple[r, g, b: uint8]
+
+  Colors* = object
+    ## Unset colours keep libghostty's (or, for selection, ghostnim's) defaults.
+    foreground*, background*, cursor*: Option[ConfigRgb]
+    selectionForeground*, selectionBackground*: Option[ConfigRgb]
+    palette*: seq[(int, ConfigRgb)]   ## palette index overrides, in order
+
   Config* = object
     font*: string
     size*: int
     cols*, rows*: int
     scrollback*: int
     command*: seq[string]
+    workingDirectory*: string   ## where the first tab starts; "" = inherit
+    colors*: Colors
 
 const defaultConfig* = Config(size: 14, cols: 100, rows: 30, scrollback: 10_000)
 
@@ -29,6 +52,43 @@ proc configPath*(): string =
 
 proc warn(path: string, line: int, msg: string) =
   stderr.writeLine "ghostnim: " & path & ":" & $line & ": " & msg
+
+proc parseColor*(s: string): Option[ConfigRgb] =
+  ## "#rrggbb" or "#rgb" (the leading # is optional).
+  let h = if s.startsWith('#'): s[1 .. ^1] else: s
+  if h.len notin [3, 6] or not h.allCharsInSet(HexDigits): return
+  let full = if h.len == 3: h[0] & h[0] & h[1] & h[1] & h[2] & h[2] else: h
+  some((fromHex[uint8](full[0 .. 1]), fromHex[uint8](full[2 .. 3]),
+        fromHex[uint8](full[4 .. 5])))
+
+proc parseColors(c: var Colors, nodes: seq[KdlNode], path: string) =
+  for n in nodes:
+    template bad(msg: string) =
+      warn(path, n.line, "colors: " & n.name & ": " & msg)
+      continue
+    proc color(v: KdlVal): Option[ConfigRgb] =
+      if v.kind == kString: parseColor(v.str) else: none(ConfigRgb)
+    const colorHint = "expected a colour like \"#1a1b26\", got "
+    if n.props.len != 0 or n.children.len != 0: bad("unexpected properties or block")
+    if n.name == "palette":
+      if n.args.len != 2 or n.args[0].kind != kInt:
+        bad("expected an index and a colour, like: palette 1 \"#f7768e\"")
+      let i = n.args[0].num
+      if i < 0 or i > 255: bad("index must be between 0 and 255")
+      let col = color(n.args[1])
+      if col.isNone: bad(colorHint & $n.args[1])
+      c.palette.add (i.int, col.get)
+      continue
+    if n.args.len != 1: bad("expected exactly one colour")
+    let col = color(n.args[0])
+    if col.isNone: bad(colorHint & $n.args[0])
+    case n.name
+    of "foreground": c.foreground = col
+    of "background": c.background = col
+    of "cursor": c.cursor = col
+    of "selection-foreground": c.selectionForeground = col
+    of "selection-background": c.selectionBackground = col
+    else: bad("unknown colour")
 
 proc parseConfig*(text: string, path = "config.kdl"): Config =
   ## Apply the settings in `text` over the defaults. Problems are reported on
@@ -73,6 +133,14 @@ proc parseConfig*(text: string, path = "config.kdl"): Config =
         if a.kind == kString: cmd.add a.str
       if cmd.len != n.args.len: bad("expected strings")
       result.command = cmd
+    of "working-directory":
+      let dir = expandTilde(strArg())
+      if not dirExists(dir): bad("no such directory: " & dir)
+      result.workingDirectory = dir
+    of "colors":
+      if n.args.len != 0 or n.props.len != 0:
+        bad("expected a { ... } block of colours")
+      result.colors.parseColors(n.children, path)
     else:
       bad("unknown setting")
 

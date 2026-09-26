@@ -1,20 +1,83 @@
-// ghostnim config — copy to ~/.config/ghostnim/config.kdl
-// (or $XDG_CONFIG_HOME/ghostnim/config.kdl). Every setting is optional;
-// the values below are the defaults. Options on the command line win.
-// Syntax: https://kdl.dev — `/-` comments out the node after it.
+// ghostnim config file
+//
+// Copy this to ~/.config/ghostnim/config.kdl (or
+// $XDG_CONFIG_HOME/ghostnim/config.kdl), or point at it with --config FILE.
+//
+// Every setting is optional, and each one below is set to its default, so
+// this file changes nothing until you edit it. Options given on the command
+// line override the file. A setting with a mistake in it is reported on
+// stderr and skipped; the rest of the file still applies.
+//
+// The syntax is KDL (https://kdl.dev): `name value`, one per line. `//`
+// starts a comment, and `/-` in front of a setting comments out all of it.
 
-// Font family (resolved through fontconfig) or a path to a font file.
-/-font "JetBrains Mono"
+// --- Font ------------------------------------------------------------------
 
-// Font size in points. Ctrl+0 resets zoom to this.
+// Font family, looked up through fontconfig, or a path to a .ttf/.otf file.
+// For a family, its bold and italic faces are found too. Default: "monospace".
+// Command line: -f, --font.
+font "monospace"
+
+// Font size in points. Ctrl+= and Ctrl+- zoom, and Ctrl+0 goes back to this.
+// Default: 14. Command line: -s, --size.
 font-size 14
 
-// Initial window size, in cells.
+// --- Window ----------------------------------------------------------------
+
+// Size of the first window, in character cells. Default: 100 x 30.
+// Command line: --cols, --rows.
 cols 100
 rows 30
 
-// Lines of scrollback per tab.
+// --- Terminal --------------------------------------------------------------
+
+// Lines of scrollback history kept per tab. Default: 10000.
+// Command line: --scrollback.
 scrollback 10000
 
-// Program to run in each tab instead of $SHELL, with its arguments.
+// Program to run in each tab, with its arguments. Default: your login shell
+// ($SHELL, then the shell in /etc/passwd, then /bin/sh).
+// Command line: -e, --exec.
 /-command "fish" "--login"
+
+// Directory the first tab starts in. `~` means your home directory. New tabs
+// open in the current tab's directory. Default: the directory ghostnim was
+// launched from. Command line: -d, --working-directory.
+/-working-directory "~"
+
+// --- Colors ----------------------------------------------------------------
+
+// Colours are "#rrggbb" or "#rgb". Leave one out to keep the default: the
+// built-in theme for foreground, background, cursor and palette, and
+// swapped foreground/background for the selection. Programs can still
+// change these while they run (OSC 4/10/11/12).
+//
+// Remove the `/-` below to use this example theme (Tokyo Night).
+/-colors {
+  foreground "#c0caf5"
+  background "#1a1b26"
+  cursor "#c0caf5"
+  selection-foreground "#c0caf5"
+  selection-background "#33467c"
+
+  // The 256-colour palette, one entry per line: `palette INDEX "#rrggbb"`.
+  // 0-7 are the normal ANSI colours (black, red, green, yellow, blue,
+  // magenta, cyan, white), 8-15 their bright versions, and 16-255 the
+  // colour cube and greyscale ramp. Unlisted entries keep their defaults.
+  palette 0 "#15161e"
+  palette 1 "#f7768e"
+  palette 2 "#9ece6a"
+  palette 3 "#e0af68"
+  palette 4 "#7aa2f7"
+  palette 5 "#bb9af7"
+  palette 6 "#7dcfff"
+  palette 7 "#a9b1d6"
+  palette 8 "#414868"
+  palette 9 "#f7768e"
+  palette 10 "#9ece6a"
+  palette 11 "#e0af68"
+  palette 12 "#7aa2f7"
+  palette 13 "#bb9af7"
+  palette 14 "#7dcfff"
+  palette 15 "#c0caf5"
+}

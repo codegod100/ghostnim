@@ -4,7 +4,7 @@
 ## state, scrollback, reflow, key/mouse encoding and produces a render
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
-import std/[os, strutils, posix, sequtils]
+import std/[os, strutils, posix, sequtils, options]
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config]
 
 const
@@ -22,6 +22,7 @@ Options:
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
+  -d, --working-directory DIR  start the first tab in DIR  [current directory]
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
   -h, --help             show this help
@@ -38,7 +39,8 @@ to open it when the application has mouse reporting on).
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `cols 120`, `rows 36`,
-`scrollback 50000`, `command "fish" "--login"`. The command line wins.
+`scrollback 50000`, `command "fish" "--login"`, `working-directory "~/code"`,
+plus a `colors { ... }` block. The command line wins.
 """
 
 type
@@ -48,6 +50,8 @@ type
     cols, rows: int
     scrollback: int
     command: seq[string]
+    workingDirectory: string
+    colors: Colors
     screenshot: string
 
   PtyWatch = object
@@ -183,6 +187,23 @@ proc updateWindowTitle(app: App) =
 
 # --- tabs -------------------------------------------------------------------
 
+proc applyColors(app: App, term: GhosttyTerminal) =
+  ## The config file's colours become the terminal's defaults, which programs
+  ## can still override with OSC 4/10/11/12.
+  let c = app.opts.colors
+  proc toVt(c: ConfigRgb): GhosttyColorRgb = GhosttyColorRgb(r: c.r, g: c.g, b: c.b)
+  for (opt, col) in [(GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, c.foreground),
+                     (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, c.background),
+                     (GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, c.cursor)]:
+    if col.isSome:
+      var v = toVt(col.get)
+      discard ghostty_terminal_set(term, opt, addr v)
+  if c.palette.len > 0:
+    var pal: array[256, GhosttyColorRgb]
+    discard ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, addr pal)
+    for (i, col) in c.palette: pal[i] = toVt(col)
+    discard ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, addr pal)
+
 proc newTab(app: App, cwd = ""): Tab =
   ## A terminal plus a child on a pty, sized to the current window.
   let (w, h) = app.outputSize()
@@ -200,7 +221,9 @@ proc newTab(app: App, cwd = ""): Tab =
                                cast[pointer](onWritePty))
   discard ghostty_terminal_set(tab.term, GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
                                cast[pointer](onTitleChanged))
-  tab.pty = spawn(app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH, cwd)
+  app.applyColors(tab.term)
+  tab.pty = spawn(app.opts.command, cols, rows, app.rd.cellW, app.rd.cellH,
+                  if cwd.len > 0: cwd else: app.opts.workingDirectory)
   tab.watch = cast[ptr PtyWatch](allocShared0(sizeof(PtyWatch)))
   tab.watch.fd = tab.pty.fd
   tab.watch.id = tab.id
@@ -720,7 +743,8 @@ proc parseOptions(): Options =
     if a in ["-c", "--config"] and j + 1 < args.len: cfgPath = args[j + 1]
   let cfg = loadConfig(cfgPath)
   result = Options(font: cfg.font, size: cfg.size, cols: cfg.cols, rows: cfg.rows,
-                   scrollback: cfg.scrollback, command: cfg.command)
+                   scrollback: cfg.scrollback, command: cfg.command,
+                   workingDirectory: cfg.workingDirectory, colors: cfg.colors)
   var i = 0
   proc need(i: var int): string =
     inc i
@@ -737,6 +761,10 @@ proc parseOptions(): Options =
     of "--cols": result.cols = parseInt(need(i))
     of "--rows": result.rows = parseInt(need(i))
     of "--scrollback": result.scrollback = parseInt(need(i))
+    of "-d", "--working-directory":
+      result.workingDirectory = expandTilde(need(i))
+      if not dirExists(result.workingDirectory):
+        quit("ghostnim: no such directory: " & result.workingDirectory, 2)
     of "--screenshot": result.screenshot = need(i)
     of "-e", "--exec":
       result.command = args[i + 1 .. ^1]
@@ -784,6 +812,11 @@ proc main() =
   discard getRendererOutputSize(r, addr ow, addr oh)
   let scale = if ww > 0: ow.float / ww.float else: 1.0
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
+  template toRgb(c: ConfigRgb): Rgb = Rgb(r: c.r, g: c.g, b: c.b)
+  if opts.colors.selectionForeground.isSome:
+    app.rd.selectionFg = some(toRgb(opts.colors.selectionForeground.get))
+  if opts.colors.selectionBackground.isSome:
+    app.rd.selectionBg = some(toRgb(opts.colors.selectionBackground.get))
   let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))

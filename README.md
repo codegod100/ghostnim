@@ -123,6 +123,7 @@ ghostnim [options] [-e command [args...]]
       --cols N           initial columns                          [100]
       --rows N           initial rows                             [30]
       --scrollback N     scrollback lines                         [10000]
+  -d, --working-directory DIR  start the first tab in DIR  [current directory]
       --screenshot FILE  render one frame after startup to FILE (BMP) and exit
   -e, --exec CMD ...     run CMD instead of $SHELL (must be last)
 ```
@@ -143,9 +144,20 @@ cols 120
 rows 36
 scrollback 50000
 command "fish" "--login"
+working-directory "~/code"
+
+colors {
+  foreground "#c0caf5"
+  background "#1a1b26"
+  cursor "#c0caf5"
+  selection-foreground "#c0caf5"
+  selection-background "#33467c"
+  palette 1 "#f7768e"   // one line per 256-colour palette entry to change
+}
 ```
 
-[`docs/config.kdl`](docs/config.kdl) lists every setting with its default.
+[`docs/config.kdl`](docs/config.kdl) lists every setting with its default and
+what it does, so it's a good starting point to copy.
 Mistakes such as an unknown setting or a value out of range are reported on
 stderr and skipped, so a broken config never stops the terminal from starting.
 
@@ -170,4 +182,4 @@ stderr and skipped, so a broken config never stops the terminal from starting.
 - libghostty-vt's API is still pre-1.0. The bindings target the commit pinned
   in `scripts/build-libghostty-vt.sh`.
 - Not implemented yet: Kitty graphics, ligatures/shaping, colour emoji,
-  hyperlinks, and colour/keybinding settings in the config file.
+  hyperlinks, and keybinding settings in the config file.
