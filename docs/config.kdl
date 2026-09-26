@@ -69,6 +69,13 @@ scrollback 10000
 // Command line: --no-inherit-directory.
 inherit-directory #true
 
+// --- Selection -------------------------------------------------------------
+
+// Copy text to the clipboard as soon as it's selected: by dragging, by
+// double-clicking a word or triple-clicking a line, or with Select All.
+// With #false, only copy (Ctrl+Shift+C) copies. Default: #true.
+copy-on-select #true
+
 // --- Colors ----------------------------------------------------------------
 
 // Colours are "#rrggbb" or "#rgb". Leave one out to keep the default: the

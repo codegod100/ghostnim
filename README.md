@@ -31,7 +31,13 @@ the event loop.
 - Mouse reporting through libghostty's mouse encoder (X10/normal/button/any,
   SGR and more). Hold Shift to select instead.
 - Mouse selection, copy (Ctrl+Shift+C), paste (Ctrl+Shift+V or middle click)
-  with bracketed paste.
+  with bracketed paste. Double-click selects the word under the pointer,
+  where a "word" is as much as you'd want: a whole URL, path
+  (`src/foo.nim:12:3`), flag (`--color=auto`), e-mail address or
+  `host:port`, without the sentence punctuation after it. Triple-click
+  selects the line. Keep dragging after a double or triple click to extend
+  by words or lines. Every selection, Select All included, is copied to the
+  clipboard as soon as it's made (turn off with `copy-on-select #false`).
 - Ctrl+click opens links with `xdg-open`: OSC 8 hyperlinks, and URLs in the
   text (`https://`, `http://`, `file://`, `mailto:`, `www.` and a few more),
   even when they wrap onto the next line. The pointer turns into a hand over
@@ -169,6 +175,7 @@ scrollback 50000
 command "fish" "--login"
 working-directory "~/code"
 inherit-directory #false     // new tabs start in working-directory too
+copy-on-select #false        // selecting text doesn't copy it
 
 colors {
   foreground "#c0caf5"

@@ -11,6 +11,7 @@
 ##   command "fish" "--login"
 ##   working-directory "~/code"
 ##   inherit-directory #false   // new tabs start in working-directory too
+##   copy-on-select #false      // selecting text doesn't copy it
 ##
 ## Colours go in a `colors` block, as "#rrggbb" or "#rgb":
 ##
@@ -57,12 +58,14 @@ type
     workingDirectory*: string   ## where the first tab starts; "" = inherit
     inheritDirectory*: bool     ## new tabs start in the current tab's directory
     fontShaping*: bool          ## ligatures and contextual alternates
+    copyOnSelect*: bool         ## selecting text copies it to the clipboard
     colors*: Colors
     keybinds*: Keybinds
 
 proc defaultConfig*(): Config =
   Config(size: 14, cols: 100, rows: 30, scrollback: 10_000,
-         inheritDirectory: true, fontShaping: true, keybinds: defaultKeybinds())
+         inheritDirectory: true, fontShaping: true, copyOnSelect: true,
+         keybinds: defaultKeybinds())
 
 proc configPath*(): string =
   let xdg = getEnv("XDG_CONFIG_HOME")
@@ -196,6 +199,7 @@ proc parseConfig*(text: string, path = "config.kdl", ok: var bool): Config =
       if not dirExists(dir): bad("no such directory: " & dir)
       result.workingDirectory = dir
     of "inherit-directory": result.inheritDirectory = boolArg()
+    of "copy-on-select": result.copyOnSelect = boolArg()
     of "keybinds": result.keybinds.parseKeybinds(n, path)
     of "colors":
       if n.args.len != 0 or n.props.len != 0:
