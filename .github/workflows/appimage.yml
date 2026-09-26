@@ -58,6 +58,13 @@ jobs:
       - name: Smoke test
         run: |
           APPIMAGE_EXTRACT_AND_RUN=1 ./"$OUTPUT" --help
+          # The binary must run on any x86-64 CPU, so no AVX/AVX-512 code
+          # (the runner's CPU has it; users' may not, and would get SIGILL).
+          if objdump -d ghostnim | grep -Eq '%[yz]mm[0-9]'; then
+            echo "error: ghostnim contains AVX/AVX-512 instructions" >&2
+            objdump -d ghostnim | grep -E '%[yz]mm[0-9]' | head -20 >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
