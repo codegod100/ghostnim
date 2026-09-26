@@ -112,7 +112,10 @@ proc defaultKeybinds*(): Keybinds =
   b "shift+page-up", acScrollPageUp
   b "shift+page-down", acScrollPageDown
   b "ctrl+=", acFontBigger
+  b "ctrl+shift+=", acFontBigger         # ctrl++ on a US layout
+  b "ctrl+numpad-add", acFontBigger
   b "ctrl+-", acFontSmaller
+  b "ctrl+numpad-subtract", acFontSmaller
   b "ctrl+0", acFontReset
   b "ctrl+shift+,", acReloadConfig
   b "ctrl+,", acOpenConfig
