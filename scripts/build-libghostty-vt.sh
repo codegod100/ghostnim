@@ -11,11 +11,17 @@
 #   SIMD          true|false, SIMD-accelerated parsing (default: false)
 #                 true needs libc++ at link time, so only use it together
 #                 with GHOSTTY_VT_SHARED=1 when building ghostnim.
+#   CPU           Zig -Dcpu model                      (default: baseline)
+#                 Zig otherwise targets the build machine's CPU, and the
+#                 library (static in the AppImage) then dies with SIGILL
+#                 on CPUs lacking its extensions (e.g. AVX-512). Set
+#                 CPU=native for a build that only runs on this machine.
 set -eu
 
 GHOSTTY_REF=${GHOSTTY_REF:-6301810a48aaa3426887a4316668f18833a40138}
 ZIG=${ZIG:-zig}
 SIMD=${SIMD:-false}
+CPU=${CPU:-baseline}
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SRC="$ROOT/vendor/ghostty-src"
@@ -44,6 +50,7 @@ cd "$SRC"
   -Demit-lib-vt \
   -Doptimize=ReleaseFast \
   -Dsimd="$SIMD" \
+  -Dcpu="$CPU" \
   --prefix "$PREFIX"
 
 echo
