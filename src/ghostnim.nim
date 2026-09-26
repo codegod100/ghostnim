@@ -5,7 +5,7 @@
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
 import std/[os, strutils, posix]
-import ghostnim/[vt, sdl, pty, renderer, input]
+import ghostnim/[vt, sdl, pty, renderer, input, menu]
 
 const
   version = "0.1.0"
@@ -29,6 +29,9 @@ Keys:
   Ctrl+Shift+C / Ctrl+Shift+V   copy selection / paste
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font
+
+Right-click opens a menu with copy, paste, select all and zoom (hold Shift
+to open it when the application has mouse reporting on).
 """
 
 type
@@ -67,6 +70,7 @@ type
     selAnchor: (int, int)
     mouseButtons: set[uint8]
     lastMouseCell: (int, int)
+    menu: ContextMenu
 
 # ---------------------------------------------------------------------------
 # PTY wake-up thread. It only blocks in poll() and pushes an SDL event when
@@ -223,16 +227,31 @@ proc paste(app: App) =
     outBuf.setLen(written.int)
     app.sendInput(outBuf)
 
-proc viewportRef(app: App, col, row: int): (bool, GhosttyGridRef) =
+proc gridRef(app: App, col, row: int, tag = GHOSTTY_POINT_TAG_VIEWPORT): (bool, GhosttyGridRef) =
   var pt: GhosttyPoint
-  pt.tag = GHOSTTY_POINT_TAG_VIEWPORT
+  pt.tag = tag
   pt.value.coordinate = GhosttyPointCoordinate(x: col.uint16, y: row.uint32)
   var r = initSized(GhosttyGridRef)
   (ghostty_terminal_grid_ref(app.term, pt, addr r) == GHOSTTY_SUCCESS, r)
 
 proc setSelection(app: App, a, b: (int, int)) =
-  let (okA, ra) = app.viewportRef(a[0], a[1])
-  let (okB, rb) = app.viewportRef(b[0], b[1])
+  let (okA, ra) = app.gridRef(a[0], a[1])
+  let (okB, rb) = app.gridRef(b[0], b[1])
+  if not (okA and okB): return
+  var sel = initSized(GhosttySelection)
+  sel.start = ra
+  sel.`end` = rb
+  discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_SELECTION, addr sel)
+
+proc selectAll(app: App) =
+  ## Select everything, from the top of the scrollback to the bottom-right
+  ## of the active screen.
+  var cols, rows: uint16
+  discard ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
+  discard ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+  let (okA, ra) = app.gridRef(0, 0, GHOSTTY_POINT_TAG_SCREEN)
+  let (okB, rb) = app.gridRef(max(0, cols.int - 1), max(0, rows.int - 1),
+                              GHOSTTY_POINT_TAG_ACTIVE)
   if not (okA and okB): return
   var sel = initSized(GhosttySelection)
   sel.start = ra
@@ -241,6 +260,10 @@ proc setSelection(app: App, a, b: (int, int)) =
 
 proc clearSelection(app: App) =
   discard ghostty_terminal_set(app.term, GHOSTTY_TERMINAL_OPT_SELECTION, nil)
+
+proc hasSelection(app: App): bool =
+  var sel = initSized(GhosttySelection)
+  ghostty_terminal_get(app.term, GHOSTTY_TERMINAL_DATA_SELECTION, addr sel) == GHOSTTY_SUCCESS
 
 proc copySelection(app: App) =
   var sel = initSized(GhosttySelection)
@@ -264,6 +287,36 @@ proc copySelection(app: App) =
     ghostty_free(nil, p, n)
   ghostty_formatter_free(fmt)
 
+proc zoom(app: App, size: int) =
+  app.rd.setFontSize(size)
+  app.applySize()
+
+# --- context menu -----------------------------------------------------------
+
+proc runMenuAction(app: App, action: MenuAction) =
+  if action == maNone: return
+  app.menu.close()
+  case action
+  of maCopy: app.copySelection()
+  of maPaste: app.paste()
+  of maSelectAll: app.selectAll()
+  of maZoomIn: app.zoom(app.rd.fontSize + 1)
+  of maZoomOut: app.zoom(app.rd.fontSize - 1)
+  of maZoomReset: app.zoom(app.opts.size)
+  of maNone: discard
+
+proc menuKey(app: App, e: KeyboardEvent) =
+  ## Keyboard handling while the menu is open; nothing reaches the terminal.
+  case toGhosttyKey(e.keysym.scancode)
+  of gkArrowDown: app.menu.moveHover(1)
+  of gkArrowUp: app.menu.moveHover(-1)
+  of gkEnter, gkNumpadEnter, gkSpace: app.runMenuAction(app.menu.activate())
+  else:
+    app.menu.close()
+  # Swallow any text the key would have produced.
+  app.hasPendingKey = false
+  app.suppressText = true
+
 # --- events -----------------------------------------------------------------
 
 proc handleShortcut(app: App, sym: int32, scancode: cint, mods: uint16): bool =
@@ -282,18 +335,19 @@ proc handleShortcut(app: App, sym: int32, scancode: cint, mods: uint16): bool =
     app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, if key == gkPageUp: -d else: d)
     return true
   if ctrl and not shift and key in {gkEqual, gkMinus, gkDigit0}:
-    let size = case key
-               of gkEqual: app.rd.fontSize + 1
-               of gkMinus: app.rd.fontSize - 1
-               else: app.opts.size
-    app.rd.setFontSize(size)
-    app.applySize()
+    app.zoom(case key
+             of gkEqual: app.rd.fontSize + 1
+             of gkMinus: app.rd.fontSize - 1
+             else: app.opts.size)
     return true
   false
 
 proc onKeyDown(app: App, e: KeyboardEvent) =
   let sym = e.keysym.sym
   let smods = e.keysym.`mod`
+  if app.menu.open:
+    app.menuKey(e)
+    return
   if app.handleShortcut(sym, e.keysym.scancode, smods): return
   app.suppressText = false
   let key = toGhosttyKey(e.keysym.scancode)
@@ -319,6 +373,7 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
 
 proc onKeyUp(app: App, e: KeyboardEvent) =
   # Only emitted when the kitty keyboard protocol asks for release events.
+  if app.menu.open: return
   app.encodeKey(toGhosttyKey(e.keysym.scancode), GHOSTTY_KEY_ACTION_RELEASE,
                 toGhosttyMods(e.keysym.`mod`), unshiftedCodepoint(e.keysym.sym), "")
 
@@ -327,6 +382,7 @@ proc onTextInput(app: App, e: TextInputEvent) =
   if app.suppressText:
     app.suppressText = false
     return
+  if app.menu.open: return
   if app.hasPendingKey:
     app.hasPendingKey = false
     app.encodeKey(app.pendingKey, GHOSTTY_KEY_ACTION_PRESS, app.pendingMods,
@@ -379,8 +435,36 @@ proc reportMouse(app: App): bool =
   ## Send mouse events to the app unless Shift is held (forces selection).
   app.mouseTracking() and (getModState() and KMOD_SHIFT) == 0
 
+proc openMenu(app: App, x, y: int32) =
+  let (px, py) = app.pixelPos(x, y)
+  let (w, h) = app.outputSize()
+  app.menu.show(app.rd, @[
+    item("Copy", maCopy, "Ctrl+Shift+C", app.hasSelection()),
+    item("Paste", maPaste, "Ctrl+Shift+V", hasClipboardText() != 0),
+    item("Select All", maSelectAll),
+    separator(),
+    item("Zoom In", maZoomIn, "Ctrl+="),
+    item("Zoom Out", maZoomOut, "Ctrl+-"),
+    item("Reset Zoom", maZoomReset, "Ctrl+0"),
+  ], int(px), int(py), w, h)
+
+proc menuMouseButton(app: App, e: MouseButtonEvent, down: bool) =
+  let (px, py) = app.pixelPos(e.x, e.y)
+  let (x, y) = (int(px), int(py))
+  if down:
+    if not app.menu.contains(x, y):
+      app.menu.close()
+      # Right-clicking elsewhere moves the menu there.
+      if e.button == BUTTON_RIGHT and not app.reportMouse():
+        app.openMenu(e.x, e.y)
+  else:
+    app.runMenuAction(app.menu.release(app.rd, x, y))
+
 proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
   if down: app.mouseButtons.incl e.button else: app.mouseButtons.excl e.button
+  if app.menu.open:
+    app.menuMouseButton(e, down)
+    return
   if app.reportMouse():
     let action = if down: GHOSTTY_MOUSE_ACTION_PRESS else: GHOSTTY_MOUSE_ACTION_RELEASE
     app.sendMouse(action, sdlButton(e.button), e.x, e.y)
@@ -394,9 +478,14 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
       app.selecting = false
   elif e.button == BUTTON_MIDDLE and down:
     app.paste()
+  elif e.button == BUTTON_RIGHT and down:
+    app.openMenu(e.x, e.y)
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
-  if app.reportMouse():
+  if app.menu.open:
+    let (px, py) = app.pixelPos(e.x, e.y)
+    app.menu.motion(app.rd, int(px), int(py))
+  elif app.reportMouse():
     let cell = app.cellAt(e.x, e.y)
     if cell == app.lastMouseCell: return
     app.lastMouseCell = cell
@@ -413,6 +502,9 @@ proc onMouseWheel(app: App, e: MouseWheelEvent) =
   var dy = e.y
   if e.direction == MOUSEWHEEL_FLIPPED: dy = -dy
   if dy == 0: return
+  if app.menu.open:
+    app.menu.close()
+    return
   if app.reportMouse():
     var x, y: cint
     discard getMouseState(addr x, addr y)
@@ -444,9 +536,12 @@ proc handleEvent(app: App, e: var Event) =
     app.onMouseWheel(e.wheel)
   elif t == EV_WINDOW:
     case e.window.event
-    of WINDOWEVENT_SIZE_CHANGED: app.applySize()
+    of WINDOWEVENT_SIZE_CHANGED:
+      app.menu.close()
+      app.applySize()
     of WINDOWEVENT_EXPOSED: app.needsFull = true
     of WINDOWEVENT_FOCUS_GAINED, WINDOWEVENT_FOCUS_LOST:
+      if e.window.event == WINDOWEVENT_FOCUS_LOST: app.menu.close()
       app.rd.focused = e.window.event == WINDOWEVENT_FOCUS_GAINED
       app.needsFull = true
     else: discard
@@ -575,6 +670,7 @@ proc main() =
       lastBlink = now
     if not app.running: break
     app.rd.draw(app.term, app.needsFull, blinkOn)
+    app.menu.draw(app.rd)
     app.needsFull = false
     if opts.screenshot.len > 0 and now - startTicks > 1500:
       # Headless test hook: capture the backbuffer before presenting it.

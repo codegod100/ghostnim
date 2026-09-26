@@ -16,9 +16,9 @@ type
     tex: TexturePtr
     w, h: cint
 
-  Rgb = object
+  Rgb* = object
     ## Plain Nim colour; C structs are kept out of GC'd objects.
-    r, g, b: uint8
+    r*, g*, b*: uint8
 
   CellInfo = object
     text: string
@@ -50,7 +50,7 @@ type
     colors*: GhosttyRenderStateColors
     focused*: bool
 
-proc rgb(c: GhosttyColorRgb): Rgb {.inline.} = Rgb(r: c.r, g: c.g, b: c.b)
+proc rgb*(c: GhosttyColorRgb): Rgb {.inline.} = Rgb(r: c.r, g: c.g, b: c.b)
 
 proc check(res: GhosttyResult, what: string) =
   if res != GHOSTTY_SUCCESS:
@@ -234,12 +234,26 @@ proc glyph(rd: Renderer, text: string, face: Face): Glyph =
 
 # --- drawing helpers -------------------------------------------------------
 
-proc setColor(rd: Renderer, c: Rgb, a = 255'u8) =
+proc setColor*(rd: Renderer, c: Rgb, a = 255'u8) =
   discard setRenderDrawColor(rd.r, c.r, c.g, c.b, a)
 
-proc fillRect(rd: Renderer, x, y, w, h: int) =
+proc fillRect*(rd: Renderer, x, y, w, h: int) =
   var rect = Rect(x: cint(x), y: cint(y), w: cint(w), h: cint(h))
   discard renderFillRect(rd.r, addr rect)
+
+proc textWidth*(rd: Renderer, text: string): int =
+  ## Width in output pixels of `text` drawn in the regular face.
+  if text.len == 0: 0 else: rd.glyph(text, faceRegular).w.int
+
+proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
+  ## Draw a UI string (not terminal cells) with its top-left at (x, y).
+  if text.len == 0: return
+  let g = rd.glyph(text, faceRegular)
+  if g.tex == nil: return
+  var dst = Rect(x: cint(x), y: cint(y), w: g.w, h: g.h)
+  discard setTextureColorMod(g.tex, color.r, color.g, color.b)
+  discard setTextureAlphaMod(g.tex, 255)
+  discard renderCopy(rd.r, g.tex, nil, addr dst)
 
 proc cellX(rd: Renderer, col: int): int = rd.pad + col * rd.cellW
 proc cellY(rd: Renderer, row: int): int = rd.pad + row * rd.cellH
