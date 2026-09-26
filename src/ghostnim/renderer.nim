@@ -718,7 +718,6 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   ## refreshes the colours from the active terminal.
   let bg = rgb(rd.colors.background)
   let fg = rgb(rd.colors.foreground)
-  let accent = if rd.colors.cursor_has_value: rgb(rd.colors.cursor) else: fg
   let barBg = mix(bg, fg, 0.08)
   let n = titles.len
   let tabW = rd.tabWidth(n)
@@ -744,8 +743,6 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
                         radius, mix(bg, fg, 0.2))
       rd.fillTopRounded(x + inset div 2 + line, inset + line, tabW - inset - 2 * line,
                         rd.top - inset - line, radius - line, bg)
-      rd.setColor(accent)
-      rd.fillRect(x + inset div 2 + radius, inset + line, tabW - inset - 2 * radius, line)
     elif i + 1 != active:
       rd.setColor(mix(bg, fg, 0.25))
       rd.fillRect(x + tabW - line, inset + (rd.top - inset) div 4, line, (rd.top - inset) div 2)
