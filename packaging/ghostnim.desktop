@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ghostnim
+GenericName=Terminal
+Comment=A terminal emulator powered by libghostty-vt
+Exec=ghostnim
+Icon=ghostnim
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;prompt;command;commandline;
+StartupWMClass=ghostnim
