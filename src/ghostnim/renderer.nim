@@ -52,6 +52,7 @@ type
     ascent: int
     pad*: int                ## padding around the grid, in output pixels
     top*: int                ## height of the bars above the grid
+    left*: int               ## width of the file pane left of the grid (0: hidden)
     tabH*: int               ## height of the tab bar
     folderH*: int            ## height of the recent-folders strip under it
     folderBar*: bool         ## whether the recent-folders strip is shown
@@ -254,7 +255,7 @@ proc newRenderState*(): GhosttyRenderState =
 
 proc gridSize*(rd: Renderer, outW, outH: int): (int, int) =
   ## Number of (cols, rows) that fit in an output area of the given size.
-  (max(1, (outW - 2 * rd.pad) div rd.cellW),
+  (max(1, (outW - rd.left - 2 * rd.pad) div rd.cellW),
    max(1, (outH - rd.top - 2 * rd.pad) div rd.cellH))
 
 proc resize*(rd: Renderer, outW, outH: int) =
@@ -377,7 +378,7 @@ proc drawText*(rd: Renderer, text: string, x, y: int, color: Rgb) =
   discard setTextureAlphaMod(g.tex, 255)
   discard renderCopy(rd.r, g.tex, nil, addr dst)
 
-proc cellX(rd: Renderer, col: int): int = rd.pad + col * rd.cellW
+proc cellX(rd: Renderer, col: int): int = rd.left + rd.pad + col * rd.cellW
 proc cellY(rd: Renderer, row: int): int = rd.top + rd.pad + row * rd.cellH
 
 proc drawGlyph(rd: Renderer, cell: CellInfo, col, row: int, fg: Rgb) =

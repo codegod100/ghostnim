@@ -6,13 +6,14 @@
 
 import std/[os, strutils, posix, sequtils, options]
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
-                wordsel, paths]
+                wordsel, paths, filepane]
 
 const
   version = "0.1.0"
   blinkIntervalMs = 600'u32
   shownRecentDirs = 5      ## folders in the strip under the tabs
   keptRecentDirs = 30      ## history kept per tab
+  defaultPaneWidth = 240   ## file pane width in window pixels
   usage = """
 ghostnim """ & version & """ - a Nim terminal powered by libghostty-vt
 
@@ -41,6 +42,7 @@ Keys (defaults; change them in the config file's keybinds block):
   Shift+PageUp / Shift+PageDown scroll back / forward
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font (also Ctrl++)
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
+  Ctrl+Shift+E                  show and focus / hide the file manager
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 
 Drag to select text, double-click to select a word, path or URL, and
@@ -52,8 +54,17 @@ Ctrl+click a path to a directory to open a new tab there, or a path to a file
 to open it in $VISUAL/$EDITOR in a new tab.
 
 Right-click opens a menu with copy, paste, select all, zoom, show/hide recent
-folders and Open Config (hold Shift to open it when the application has mouse
-reporting on). Click a recent folder under the tabs to cd there.
+folders, show/hide the file manager and Open Config (hold Shift to open it when
+the application has mouse reporting on). Click a recent folder under the tabs
+to cd there.
+
+Ctrl+Shift+E shows the file manager, split off the left of the window. It
+lists the current tab's folder: click a folder to cd there, double-click a
+file to open it, middle-click a file to type its path into the terminal (or a
+folder to open a new tab there), and drag the divider to resize it. While it
+has focus: arrows, PageUp/PageDown and Home/End move, Enter opens, Left or
+Backspace goes up, typing jumps to a name, Ctrl+H shows or hides dotfiles,
+Shift+Enter types the path into the terminal and Escape returns to it.
 
 Every option except --config, --screenshot and --help can also be set in the
 config file (KDL): `font "Iosevka"`, `font-size 13`, `font-shaping #false`,
@@ -148,9 +159,22 @@ type
     lastMouseCell: (int, int)
     menu: ContextMenu
     arrowCursor, handCursor: ptr SdlCursor
-    overLink: bool             ## the pointer shows the hand for a link or folder
+    shownCursor: ptr SdlCursor ## the pointer's current shape
+    resizeCursor: ptr SdlCursor
     dirsChecked: uint32        ## ticks of the last look at the tabs' directories
     folderHover: int           ## recent-folder chip under the pointer, -1 for none
+    ## The file manager pane.
+    pane: FilePane
+    paneOn: bool
+    paneW: int                 ## its width in window pixels
+    paneTab: int32             ## the tab it follows, -1 to pick up the current one
+    paneCwd: string            ## that tab's directory when last looked at
+    paneChecked: uint32        ## ticks of the last look for changes in the folder
+    resizingPane: bool         ## the divider is being dragged
+    paneFocused: bool          ## keys go to the file pane, not the terminal
+    typeAhead: string          ## what's been typed to find a file pane entry
+    typeAheadAt: uint32        ## ticks of the last key typed into it
+    windowFocused: bool
 
 proc cur(app: App): Tab {.inline.} = app.tabs[app.active]
 
@@ -202,9 +226,17 @@ proc outputSize(app: App): (int, int) =
   discard getRendererOutputSize(app.rd.r, addr w, addr h)
   (w.int, h.int)
 
+proc paneWidth(app: App, outW: int): int =
+  ## The file pane's width in output pixels: as set, but leaving the
+  ## terminal at least 20 columns.
+  let minW = 12 * app.rd.cellW
+  clamp(int(app.paneW.float * app.rd.scale + 0.5), minW,
+        max(minW, outW - 20 * app.rd.cellW - 2 * app.rd.pad))
+
 proc applySize(app: App) =
   ## Fit the terminal grid to the current window size.
   let (w, h) = app.outputSize()
+  app.rd.left = if app.paneOn: app.paneWidth(w) else: 0
   app.rd.resize(w, h)
   let (cols, rows) = app.rd.gridSize(w, h)
   for tab in app.tabs:
@@ -217,9 +249,9 @@ proc applySize(app: App) =
   sz.cell_width = app.rd.cellW.uint32
   sz.cell_height = app.rd.cellH.uint32
   sz.padding_top = uint32(app.rd.top + app.rd.pad)
-  sz.padding_left = app.rd.pad.uint32
+  sz.padding_left = uint32(app.rd.left + app.rd.pad)
   sz.padding_bottom = uint32(max(0, h - app.rd.top - app.rd.pad - rows * app.rd.cellH))
-  sz.padding_right = uint32(w - app.rd.pad - cols * app.rd.cellW)
+  sz.padding_right = uint32(max(0, w - app.rd.left - app.rd.pad - cols * app.rd.cellW))
   ghostty_mouse_encoder_setopt(app.mouseEncoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, addr sz)
   app.needsFull = true
 
@@ -369,6 +401,7 @@ proc free(tab: Tab) =
 
 proc activate(app: App, i: int) =
   app.active = i
+  app.paneTab = -1            # the file pane follows the new tab
   app.selecting = false
   app.menu.close()
   app.needsFull = true
@@ -671,6 +704,181 @@ proc toggleFolderBar(app: App) =
     stderr.writeLine "ghostnim: can't save the folder bar setting: " &
                      getCurrentExceptionMsg().splitLines[0]
 
+# --- file manager pane ---------------------------------------------------------
+
+proc filePaneFile(): string = stateDir() / "file-pane"
+  ## "on WIDTH" or "off WIDTH", plus "hidden" when it lists dotfiles:
+  ## whether the file pane is shown, how wide, and what it lists.
+
+proc loadPaneState(app: App) =
+  app.paneW = defaultPaneWidth
+  try:
+    let parts = readFile(filePaneFile()).splitWhitespace
+    if parts.len >= 2:
+      app.paneOn = parts[0] == "on"
+      app.paneW = max(1, parseInt(parts[1]))
+      app.pane.showHidden = "hidden" in parts[2 .. ^1]
+  except IOError, OSError, ValueError:
+    discard
+
+proc savePaneState(app: App) =
+  try:
+    createDir(stateDir())
+    writeFile(filePaneFile(), (if app.paneOn: "on " else: "off ") & $app.paneW &
+                              (if app.pane.showHidden: " hidden" else: "") & "\n")
+  except OSError, IOError:
+    stderr.writeLine "ghostnim: can't save the file manager setting: " &
+                     getCurrentExceptionMsg().splitLines[0]
+
+proc syncPane(app: App) =
+  ## Keep the pane on the current tab's directory, and its listing current.
+  if not app.paneOn: return
+  let tab = app.cur
+  let cwd = tab.pty.cwd
+  if tab.id != app.paneTab or (cwd.len > 0 and cwd != app.paneCwd):
+    # A new tab, or its shell moved: follow it. Otherwise the pane stays
+    # wherever it was browsed to.
+    app.paneTab = tab.id
+    app.paneCwd = cwd
+    if cwd.len > 0: app.pane.load(cwd)
+    elif app.pane.dir.len == 0: app.pane.load(getCurrentDir())   # no /proc
+    app.paneChecked = getTicks()
+    return
+  let now = getTicks()
+  if now - app.paneChecked < 500: return
+  app.paneChecked = now
+  app.pane.refresh()
+
+proc focusPane(app: App, on: bool) =
+  ## Give the keyboard to the file pane, or back to the terminal (whose
+  ## cursor then shows it has focus again).
+  let on = on and app.paneOn
+  if on == app.paneFocused: return
+  app.paneFocused = on
+  app.typeAhead = ""
+  app.rd.focused = app.windowFocused and not on
+  app.needsFull = true
+
+proc toggleFilePane(app: App, focusFirst = false) =
+  ## Show the file pane and focus it, or hide it. With `focusFirst` (the
+  ## shortcut), a pane that's shown but not focused gets focused instead.
+  if focusFirst and app.paneOn and not app.paneFocused:
+    app.focusPane(true)
+    return
+  app.paneOn = not app.paneOn
+  app.paneTab = -1
+  app.pane.hovered = -1
+  app.applySize()
+  app.savePaneState()
+  app.syncPane()             # list the folder now, for the keyboard
+  app.focusPane(app.paneOn)
+
+proc paneOpenDir(app: App, dir: string) =
+  ## Show `dir` in the pane, and cd the shell there when it's at its prompt.
+  if not dirExists(dir):
+    app.pane.refresh()
+    return
+  if app.cur.pty.atPrompt:
+    app.sendInput("cd " & quoteShell(dir) & "\r")
+  app.pane.load(dir)
+
+proc toggleHiddenFiles(app: App) =
+  ## List dotfiles in the file pane, or stop listing them.
+  let (_, h) = app.outputSize()
+  app.pane.setShowHidden(not app.pane.showHidden)
+  if app.pane.selected >= 0: app.pane.select(app.pane.selected, app.rd.visibleRows(h))
+  app.pane.scrollBy(app.rd, 0, h)   # keep the list's end at the bottom
+  app.savePaneState()
+
+proc paneRows(app: App): int = app.rd.visibleRows(app.outputSize()[1])
+
+proc paneOpen(app: App) =
+  ## Enter on the selected entry: go into a folder, open a file.
+  let i = app.pane.selected
+  if i < 0: return
+  let path = app.pane.path(i)
+  if app.pane.entries[i].isDir:
+    let parent = app.pane.entries[i].name == ".."
+    let came = app.pane.dir.lastPathPart
+    app.paneOpenDir(path)
+    app.pane.selectName(if parent: came else: "", app.paneRows)
+  else:
+    openExternal(path)
+
+proc paneUp(app: App) =
+  ## Go to the parent folder, with the one we were in selected.
+  if app.pane.dir.len == 0 or app.pane.dir == "/": return
+  let came = app.pane.dir.lastPathPart
+  app.paneOpenDir(app.pane.dir.parentDir)
+  app.pane.selectName(came, app.paneRows)
+
+proc paneKey(app: App, e: KeyboardEvent) =
+  ## Keyboard handling while the file pane has focus; nothing reaches the
+  ## terminal. Printable keys come back through SDL_TEXTINPUT as type-ahead.
+  app.hasPendingKey = false
+  app.suppressText = false
+  let rows = app.paneRows
+  let shift = (e.keysym.`mod` and KMOD_SHIFT) != 0
+  let sel = app.pane.selected
+  case toGhosttyKey(e.keysym.scancode)
+  of gkArrowDown: app.pane.select(sel + 1, rows)
+  of gkArrowUp: app.pane.select(if sel < 0: 0 else: sel - 1, rows)
+  of gkPageDown: app.pane.select(sel + max(1, rows - 1), rows)
+  of gkPageUp: app.pane.select(sel - max(1, rows - 1), rows)
+  of gkHome: app.pane.select(0, rows)
+  of gkEnd: app.pane.select(app.pane.entries.len - 1, rows)
+  of gkEnter, gkNumpadEnter:
+    if shift and sel >= 0:
+      # Type the path into the terminal and go back to it.
+      app.sendInput(quoteShell(app.pane.path(sel)) & " ")
+      app.focusPane(false)
+    else:
+      app.paneOpen()
+  of gkArrowRight:
+    if sel >= 0 and app.pane.entries[sel].isDir: app.paneOpen()
+  of gkArrowLeft, gkBackspace: app.paneUp()
+  of gkEscape: app.focusPane(false)
+  of gkH:
+    if (e.keysym.`mod` and KMOD_CTRL) == 0: return   # type-ahead
+    app.toggleHiddenFiles()
+  else: return
+  app.typeAhead = ""
+
+proc paneTypeAhead(app: App, text: string) =
+  ## Letters typed into the focused pane select the entry they start.
+  if text.strip.len == 0: return
+  let now = getTicks()
+  if now - app.typeAheadAt > 1000: app.typeAhead = ""
+  app.typeAheadAt = now
+  app.typeAhead.add text
+  app.pane.jumpTo(app.typeAhead, app.paneRows)
+
+proc onPaneClick(app: App, button, clicks: uint8, x, y: int) =
+  let (_, h) = app.outputSize()
+  app.focusPane(true)
+  let i = app.pane.entryAt(app.rd, x, y, h)
+  if i < 0: return
+  let path = app.pane.path(i)
+  let isDir = app.pane.entries[i].isDir
+  case button
+  of BUTTON_LEFT:
+    app.pane.selected = i
+    if isDir: app.paneOpenDir(path)
+    elif clicks >= 2: openExternal(path)
+  of BUTTON_MIDDLE:
+    if isDir and dirExists(path): app.addTab(dir = path)
+    elif not isDir: app.sendInput(quoteShell(path) & " ")
+  else: discard
+
+proc dragDivider(app: App, x: int32) =
+  ## Resize the pane to end at window x coordinate `x`.
+  let (w, _) = app.outputSize()
+  let old = app.rd.left
+  app.paneW = max(1, x.int)
+  let px = app.paneWidth(w)
+  app.paneW = int(px.float / app.rd.scale + 0.5)   # stay within the limits
+  if px != old: app.applySize()
+
 # --- context menu -----------------------------------------------------------
 
 proc runMenuAction(app: App, action: MenuAction) =
@@ -685,6 +893,8 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maZoomReset: app.zoom(app.opts.size)
   of maOpenConfig: app.openConfig()
   of maToggleFolderBar: app.toggleFolderBar()
+  of maToggleFilePane: app.toggleFilePane()
+  of maToggleHiddenFiles: app.toggleHiddenFiles()
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -727,6 +937,8 @@ proc runAction(app: App, b: Binding) =
   of acSendText: app.sendInput(b.text)
   of acReloadConfig: app.reloadConfig()
   of acOpenConfig: app.openConfig()
+  of acToggleFilePane: app.toggleFilePane(focusFirst = true)
+  of acToggleHiddenFiles: app.toggleHiddenFiles()
 
 proc handleShortcut(app: App, scancode: cint, mods: uint16): bool =
   ## Keybindings from the config (or the defaults). True if the key was used.
@@ -750,6 +962,9 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
     # A binding like shift+a or alt+1 would also type its character.
     app.hasPendingKey = false
     app.suppressText = producesText(sym, smods)
+    return
+  if app.paneFocused:
+    app.paneKey(e)
     return
   app.suppressText = false
   let key = toGhosttyKey(e.keysym.scancode)
@@ -775,7 +990,7 @@ proc onKeyDown(app: App, e: KeyboardEvent) =
 
 proc onKeyUp(app: App, e: KeyboardEvent) =
   # Only emitted when the kitty keyboard protocol asks for release events.
-  if app.menu.open: return
+  if app.menu.open or app.paneFocused: return
   app.encodeKey(toGhosttyKey(e.keysym.scancode), GHOSTTY_KEY_ACTION_RELEASE,
                 toGhosttyMods(e.keysym.`mod`), unshiftedCodepoint(e.keysym.sym), "")
 
@@ -785,6 +1000,9 @@ proc onTextInput(app: App, e: TextInputEvent) =
     app.suppressText = false
     return
   if app.menu.open: return
+  if app.paneFocused:
+    app.paneTypeAhead(text)
+    return
   if app.hasPendingKey:
     app.hasPendingKey = false
     app.encodeKey(app.pendingKey, GHOSTTY_KEY_ACTION_PRESS, app.pendingMods,
@@ -801,7 +1019,8 @@ proc cellAt(app: App, x, y: int32): (int, int) =
   var cols, rows: uint16
   discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_COLS, addr cols)
   discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
-  let c = clamp(int((px - app.rd.pad.float) / app.rd.cellW.float), 0, max(0, cols.int - 1))
+  let c = clamp(int((px - float(app.rd.left + app.rd.pad)) / app.rd.cellW.float), 0,
+                max(0, cols.int - 1))
   let r = clamp(int((py - float(app.rd.top + app.rd.pad)) / app.rd.cellH.float), 0,
                 max(0, rows.int - 1))
   (c, r)
@@ -943,21 +1162,27 @@ proc linkModifier(): bool =
 
 proc updateLinkCursor(app: App) =
   ## Show a hand while Ctrl is held over a link or path, and over a recent
-  ## folder.
+  ## folder or a file pane entry; a resize arrow over the file pane's divider.
   if app.tabs.len == 0: return   # the last tab just closed
   var x, y: cint
   discard getMouseState(addr x, addr y)
-  var over = false
-  if not app.menu.open and not app.selecting and app.ownButtons.len == 0:
+  let (px, py) = app.pixelPos(x, y)
+  var want = app.arrowCursor
+  if app.resizingPane:
+    want = app.resizeCursor
+  elif not app.menu.open and not app.selecting and app.ownButtons.len == 0:
     if app.inTabBar(y):
-      let (px, py) = app.pixelPos(x, y)
-      over = app.rd.hitFolderBar(app.folderLabels, px.int, py.int) >= 0
+      if app.rd.hitFolderBar(app.folderLabels, px.int, py.int) >= 0: want = app.handCursor
+    elif app.rd.onDivider(px.int, py.int):
+      want = app.resizeCursor
+    elif app.rd.contains(px.int, py.int):
+      if app.pane.hovered >= 0: want = app.handCursor
     elif linkModifier():
       let (c, r) = app.cellAt(x, y)
-      over = app.linkAt(c, r).len > 0 or app.pathAt(c, r).len > 0
-  if over != app.overLink:
-    app.overLink = over
-    setCursor(if over: app.handCursor else: app.arrowCursor)
+      if app.linkAt(c, r).len > 0 or app.pathAt(c, r).len > 0: want = app.handCursor
+  if want != app.shownCursor:
+    app.shownCursor = want
+    setCursor(want)
 
 proc onTabBarClick(app: App, button, clicks: uint8, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
@@ -1016,6 +1241,11 @@ proc openMenu(app: App, x, y: int32) =
   let (px, py) = app.pixelPos(x, y)
   let (w, h) = app.outputSize()
   let kb = app.opts.keybinds
+  var paneItems: seq[MenuItem]
+  if app.paneOn:
+    let hiddenKey = kb.shortcutLabel(acToggleHiddenFiles)
+    paneItems.add item(if app.pane.showHidden: "Hide Hidden Files" else: "Show Hidden Files",
+                       maToggleHiddenFiles, if hiddenKey.len > 0: hiddenKey else: "Ctrl+H")
   app.menu.show(app.rd, @[
     item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
     item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
@@ -1027,6 +1257,8 @@ proc openMenu(app: App, x, y: int32) =
     separator(),
     item(if app.rd.folderBar: "Hide Recent Folders" else: "Show Recent Folders",
          maToggleFolderBar),
+    item(if app.paneOn: "Hide File Manager" else: "Show File Manager",
+         maToggleFilePane, kb.shortcutLabel(acToggleFilePane))] & paneItems & @[
     item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
   ], int(px), int(py), w, h)
 
@@ -1048,6 +1280,21 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
       app.ownButtons.incl e.button
       app.onTabBarClick(e.button, e.clicks, e.x, e.y)
       return
+    let (px, py) = app.pixelPos(e.x, e.y)
+    if e.button == BUTTON_LEFT and app.rd.onDivider(px.int, py.int):
+      app.ownButtons.incl e.button
+      app.resizingPane = true
+      return
+    if app.rd.contains(px.int, py.int):
+      if e.button == BUTTON_RIGHT:
+        # The usual menu, whatever the terminal does with the mouse.
+        app.mouseButtons.incl e.button
+        app.openMenu(e.x, e.y)
+      else:
+        app.ownButtons.incl e.button
+        app.onPaneClick(e.button, e.clicks, px.int, py.int)
+      return
+    app.focusPane(false)     # a click in the terminal gives it the keyboard back
     if e.button == BUTTON_LEFT and linkModifier():
       # Ctrl+click on a link opens it, even when the app reports the mouse.
       # A directory (a file:// link to one, or a path in the text) opens in
@@ -1067,6 +1314,9 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
         return
   if not down and e.button in app.ownButtons:
     app.ownButtons.excl e.button
+    if e.button == BUTTON_LEFT and app.resizingPane:
+      app.resizingPane = false
+      app.savePaneState()
     return
   if down: app.mouseButtons.incl e.button else: app.mouseButtons.excl e.button
   if app.menu.open:
@@ -1085,16 +1335,20 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     app.openMenu(e.x, e.y)
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
-  app.updateLinkCursor()
+  if app.resizingPane: app.dragDivider(e.x)
   let (mx, my) = app.pixelPos(e.x, e.y)
-  app.folderHover =
-    if app.menu.open or app.mouseButtons.len > 0: -1
-    else: app.rd.hitFolderBar(app.folderLabels, mx.int, my.int)
+  let idle = not app.menu.open and app.mouseButtons.len == 0 and app.ownButtons.len == 0
+  app.folderHover = if idle: app.rd.hitFolderBar(app.folderLabels, mx.int, my.int) else: -1
+  let (_, h) = app.outputSize()
+  app.pane.hovered = if idle: app.pane.entryAt(app.rd, mx.int, my.int, h) else: -1
+  app.updateLinkCursor()
+  if app.resizingPane: return
   if app.menu.open:
     let (px, py) = app.pixelPos(e.x, e.y)
     app.menu.motion(app.rd, int(px), int(py))
   elif app.reportMouse():
-    if app.mouseButtons.len == 0 and app.inTabBar(e.y): return
+    if app.mouseButtons.len == 0 and (app.inTabBar(e.y) or app.rd.contains(mx.int, my.int)):
+      return
     let cell = app.cellAt(e.x, e.y)
     if cell == app.lastMouseCell: return
     app.lastMouseCell = cell
@@ -1116,8 +1370,13 @@ proc onMouseWheel(app: App, e: MouseWheelEvent) =
     return
   var x, y: cint
   discard getMouseState(addr x, addr y)
+  let (px, py) = app.pixelPos(x, y)
   if app.inTabBar(y):
     app.cycleTab(if dy > 0: -1 else: 1)
+  elif app.rd.contains(px.int, py.int):
+    let (_, h) = app.outputSize()
+    app.pane.scrollBy(app.rd, -3 * dy, h)
+    app.pane.hovered = app.pane.entryAt(app.rd, px.int, py.int, h)
   elif app.reportMouse():
     let button = if dy > 0: GHOSTTY_MOUSE_BUTTON_FOUR else: GHOSTTY_MOUSE_BUTTON_FIVE
     for _ in 1 .. abs(dy):
@@ -1157,10 +1416,13 @@ proc handleEvent(app: App, e: var Event) =
       app.menu.close()
       app.applySize()
     of WINDOWEVENT_EXPOSED: app.needsFull = true
-    of WINDOWEVENT_LEAVE: app.folderHover = -1
+    of WINDOWEVENT_LEAVE:
+      app.folderHover = -1
+      app.pane.hovered = -1
     of WINDOWEVENT_FOCUS_GAINED, WINDOWEVENT_FOCUS_LOST:
       if e.window.event == WINDOWEVENT_FOCUS_LOST: app.menu.close()
-      app.rd.focused = e.window.event == WINDOWEVENT_FOCUS_GAINED
+      app.windowFocused = e.window.event == WINDOWEVENT_FOCUS_GAINED
+      app.rd.focused = app.windowFocused and not app.paneFocused
       app.needsFull = true
     else: discard
 
@@ -1216,7 +1478,9 @@ proc main() =
   defer: ttfQuit()
 
   let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
-                needsFull: true, folderHover: -1)
+                needsFull: true, folderHover: -1, pane: initFilePane(), paneTab: -1,
+                windowFocused: true)
+  app.loadPaneState()
   let fontPaths = resolveFonts(opts.font)
 
   # Measure the cell size first so the initial window fits cols x rows.
@@ -1234,7 +1498,8 @@ proc main() =
   app.rd = newRenderer(r, fontPaths, opts.size, scale)
   app.applySelectionColors()
   app.rd.setFolderBar(not fileExists(folderBarHiddenFlag()))
-  let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad).float / scale
+  let paneW = if app.paneOn: max(12 * app.rd.cellW, int(app.paneW.float * scale + 0.5)) else: 0
+  let winW = (opts.cols * app.rd.cellW + 2 * app.rd.pad + paneW).float / scale
   let winH = (opts.rows * app.rd.cellH + app.rd.top + 2 * app.rd.pad).float / scale
   setWindowSize(app.window, cint(winW + 0.5), cint(winH + 0.5))
 
@@ -1252,6 +1517,8 @@ proc main() =
   startTextInput()
   app.arrowCursor = createSystemCursor(SYSTEM_CURSOR_ARROW)
   app.handCursor = createSystemCursor(SYSTEM_CURSOR_HAND)
+  app.resizeCursor = createSystemCursor(SYSTEM_CURSOR_SIZEWE)
+  app.shownCursor = app.arrowCursor
 
   let startTicks = getTicks()
   var lastBlink = getTicks()
@@ -1270,7 +1537,9 @@ proc main() =
     if not app.running: break
     if opts.screenshot.len == 0: app.checkConfigChanged()
     app.trackDirs()
+    app.syncPane()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
+    app.pane.draw(app.rd, app.outputSize()[1], app.paneFocused and app.windowFocused)
     app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
     app.rd.drawFolderBar(app.folderLabels, app.folderHover)
     app.menu.draw(app.rd)
@@ -1287,6 +1556,7 @@ proc main() =
   ghostty_key_event_free(app.keyEvent)
   ghostty_key_encoder_free(app.keyEncoder)
   freeCursor(app.handCursor)
+  freeCursor(app.resizeCursor)
   freeCursor(app.arrowCursor)
   app.rd.destroy()
   destroyRenderer(r)

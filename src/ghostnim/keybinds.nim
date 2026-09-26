@@ -32,6 +32,8 @@ type
     acSendText = "send-text"         ## arg: text written to the program
     acReloadConfig = "reload-config"
     acOpenConfig = "open-config"
+    acToggleFilePane = "toggle-file-pane"
+    acToggleHiddenFiles = "toggle-hidden-files"   ## in the file pane
 
   Mod* = enum mCtrl, mShift, mAlt, mSuper
 
@@ -119,6 +121,7 @@ proc defaultKeybinds*(): Keybinds =
   b "ctrl+0", acFontReset
   b "ctrl+shift+,", acReloadConfig
   b "ctrl+,", acOpenConfig
+  b "ctrl+shift+e", acToggleFilePane
 
 proc label(c: Chord): string =
   ## "Ctrl+Shift+C", for showing in the menu.
