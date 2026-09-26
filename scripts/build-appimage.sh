@@ -8,10 +8,12 @@
 #   - fc-match and fc-list, which ghostnim runs to find fonts
 #   - DejaVu Sans Mono (default font) and Symbols Nerd Font (icon fallback),
 #     plus a fontconfig config that adds them to the host's fonts
-#   - the icon, as SVG and a 256x256 PNG (packaging/ghostnim.{svg,png})
+#   - the icon, as SVG and a 256x256 PNG rendered from it
+#     (scripts/build-icons.sh, which also renders the embedded window icon)
 #
 # Requirements: SDL2 + SDL2_ttf, fontconfig (fc-match/fc-list), curl, tar with
-# bzip2/xz support; Zig 0.16 if libghostty-vt isn't built yet.
+# bzip2/xz support; Zig 0.16 if libghostty-vt isn't built yet; rsvg-convert
+# and ImageMagick if packaging/ghostnim.svg has changed.
 #
 # Environment:
 #   LINUXDEPLOY   linuxdeploy executable     (default: download into build/tools)
@@ -30,6 +32,10 @@ DEJAVU_VERSION=${DEJAVU_VERSION:-2.37}
 NERD_FONTS_VERSION=${NERD_FONTS_VERSION:-3.4.0}
 
 cd "$ROOT"
+
+# Re-render the PNG/BMP icons from the SVG (the BMP is embedded in the binary,
+# so this must run before building).
+sh "$ROOT/scripts/build-icons.sh"
 
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
   if [ -z "${GHOSTTY_VT_PREFIX:-}" ] && [ ! -d "$ROOT/vendor/ghostty-vt/lib" ]; then
