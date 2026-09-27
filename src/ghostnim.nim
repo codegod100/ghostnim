@@ -57,7 +57,8 @@ Ctrl+click a path to a directory to open a new tab there, or a path to a file
 to open it in $VISUAL/$EDITOR in a new tab.
 
 Right-click opens a menu with copy, paste, select all, zoom, show/hide recent
-folders, show/hide the file manager, Open Folder in Editor and Open Config (hold Shift to open it when
+folders, show/hide the file manager, Open Folder in Editor, Open Config and,
+in the self-updating AppImage, Check for Updates (hold Shift to open it when
 the application has mouse reporting on). Click a recent folder under the tabs
 to cd there.
 
@@ -1036,6 +1037,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maFilterFiles:
     app.focusPane(true)
     app.pane.filtering = true
+  of maCheckUpdates: startUpdateCheck(manual = true)
   of maNone: discard
 
 proc menuKey(app: App, e: KeyboardEvent) =
@@ -1385,6 +1387,8 @@ proc openMenu(app: App, x, y: int32) =
     paneItems.add item(if app.pane.showHidden: "Hide Hidden Files" else: "Show Hidden Files",
                        maToggleHiddenFiles, if hiddenKey.len > 0: hiddenKey else: "Ctrl+H")
     paneItems.add item("Filter Files", maFilterFiles, "Ctrl+F")
+  var updateItems: seq[MenuItem]
+  if canUpdate(): updateItems.add item("Check for Updates", maCheckUpdates)
   app.menu.show(app.rd, @[
     item("Copy", maCopy, kb.shortcutLabel(acCopy), app.hasSelection()),
     item("Paste", maPaste, kb.shortcutLabel(acPaste), hasClipboardText() != 0),
@@ -1400,8 +1404,8 @@ proc openMenu(app: App, x, y: int32) =
          maToggleFilePane, kb.shortcutLabel(acToggleFilePane))] & paneItems & @[
     item("Open Folder in Editor", maOpenFolderInEditor,
          kb.shortcutLabel(acOpenFolderInEditor)),
-    item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig)),
-  ], int(px), int(py), w, h)
+    item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig))] & updateItems,
+    int(px), int(py), w, h)
 
 proc menuMouseButton(app: App, e: MouseButtonEvent, down: bool) =
   let (px, py) = app.pixelPos(e.x, e.y)
