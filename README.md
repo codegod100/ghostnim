@@ -100,6 +100,9 @@ the event loop.
   current folder in `$VISUAL`/`$EDITOR` in a new tab there, the way
   `$EDITOR .` would (in `vi` when neither is set). The folder is the one the
   file manager shows while it's open, else the current tab's directory.
+  Launched from a desktop menu, ghostnim asks your shell for `$VISUAL`/`$EDITOR`
+  when they aren't in its own environment, and if the editor fails its tab
+  stays open with the exit status instead of closing.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours
