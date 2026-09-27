@@ -51,7 +51,7 @@ the event loop.
   links to directories (`ls --hyperlink`) open in a new tab too.
 - Right-click context menu with Copy, Paste, Select All, zoom, Show/Hide
   Recent Folders,
-  Show/Hide File Manager and Open Config, drawn in-window and navigable with the
+  Show/Hide File Manager, Open Folder in Editor and Open Config, drawn in-window and navigable with the
   arrow keys and Enter. When the application has mouse reporting on, hold
   Shift to open it.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
@@ -96,6 +96,10 @@ the event loop.
   Escape clears the filter; going to another folder clears it too.
   Ctrl+Shift+E focuses a pane that's already shown, and hides it once it has
   focus.
+- Open Folder in Editor: Ctrl+Shift+O (or the right-click menu) opens the
+  current folder in `$VISUAL`/`$EDITOR` in a new tab there, the way
+  `$EDITOR .` would (in `vi` when neither is set). The folder is the one the
+  file manager shows while it's open, else the current tab's directory.
 - Window title from OSC 0/2, live resize with reflow, HiDPI.
 - Font zoom: Ctrl+= (or Ctrl++) / Ctrl+- / Ctrl+0.
 - A KDL config file for fonts, window size, shell, start directory, colours
@@ -244,7 +248,8 @@ Keybindings add to the defaults listed under Features (use
 `paste`, `select-all`, `new-tab`, `close-tab`, `next-tab`, `previous-tab`,
 `goto-tab N`, `scroll-page-up`, `scroll-page-down`, `scroll-to-top`,
 `scroll-to-bottom`, `font-bigger`, `font-smaller`, `font-reset`,
-`send-text "..."`, `reload-config`, `open-config`, `toggle-file-pane`, `toggle-hidden-files` and `none`.
+`send-text "..."`, `reload-config`, `open-config`, `toggle-file-pane`, `toggle-hidden-files`,
+`open-folder-in-editor` and `none`.
 
 **Open Config** in the right-click menu (or Ctrl+,) opens the file in
 `$VISUAL`/`$EDITOR` in a new tab, or with `xdg-open` if neither is set. If

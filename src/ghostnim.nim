@@ -45,6 +45,7 @@ Keys (defaults; change them in the config file's keybinds block):
   Ctrl+= / Ctrl+- / Ctrl+0      bigger / smaller / reset font (also Ctrl++)
   Ctrl+,                        open the config file in $VISUAL/$EDITOR
   Ctrl+Shift+E                  show and focus / hide the file manager
+  Ctrl+Shift+O                  open the current folder in $VISUAL/$EDITOR
   Ctrl+Shift+,                  reload the config file (also automatic on save)
 
 Drag to select text, double-click to select a word, path or URL, and
@@ -56,9 +57,9 @@ Ctrl+click a path to a directory to open a new tab there, or a path to a file
 to open it in $VISUAL/$EDITOR in a new tab.
 
 Right-click opens a menu with copy, paste, select all, zoom, show/hide recent
-folders, show/hide the file manager, Open Config and, in the self-updating
-AppImage, Check for Updates (hold Shift to open it when the application has
-mouse reporting on). Click a recent folder under the tabs
+folders, show/hide the file manager, Open Folder in Editor, Open Config and,
+in the self-updating AppImage, Check for Updates (hold Shift to open it when
+the application has mouse reporting on). Click a recent folder under the tabs
 to cd there.
 
 Ctrl+Shift+E shows the file manager, split off the left of the window. It
@@ -631,20 +632,35 @@ proc openExternal(target: string) =
     return
   discard execShellCmd(opener & " " & quoteShell(target) & " >/dev/null 2>&1 &")
 
+proc editorTab(app: App, path: string, dir = ""): bool =
+  ## Run $VISUAL or $EDITOR on `path` in a new tab (in `dir`). False when
+  ## neither is set.
+  let editor = getEnv("VISUAL", getEnv("EDITOR"))
+  if editor.len == 0: return false
+  # Through sh so an $EDITOR with arguments ("code --wait") works.
+  app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path], dir)
+  true
+
 proc openConfig(app: App) =
   ## Open the config file for editing, creating it from the commented
   ## defaults first if needed. $VISUAL or $EDITOR runs in a new tab;
   ## without either, the desktop's handler for the file (xdg-open).
   let path = configFile(app.cli.configPath)
   if not ensureConfigFile(path): return
-  let editor = getEnv("VISUAL", getEnv("EDITOR"))
-  if editor.len > 0:
-    # Through sh so an $EDITOR with arguments ("code --wait") works.
-    app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path])
+  if app.editorTab(path): discard
   elif findExe("xdg-open").len > 0:
     openExternal(path)
   else:
     app.addTab(@["vi", path])
+
+proc openFolderInEditor(app: App) =
+  ## Open the current folder (the file manager's, when it's shown, else the
+  ## tab's) in $VISUAL/$EDITOR in a new tab there, or in vi without either.
+  let dir = if app.paneOn and app.pane.dir.len > 0: app.pane.dir
+            else: app.cur.pty.cwd
+  if dir.len == 0 or not dirExists(dir): return
+  if not app.editorTab(dir, dir):
+    app.addTab(@["vi", dir], dir)
 
 proc checkConfigChanged(app: App) =
   ## Poll the config file (at most once a second) and reload when it changes.
@@ -1014,6 +1030,7 @@ proc runMenuAction(app: App, action: MenuAction) =
   of maZoomOut: app.zoom(app.rd.fontSize - 1)
   of maZoomReset: app.zoom(app.opts.size)
   of maOpenConfig: app.openConfig()
+  of maOpenFolderInEditor: app.openFolderInEditor()
   of maToggleFolderBar: app.toggleFolderBar()
   of maToggleFilePane: app.toggleFilePane()
   of maToggleHiddenFiles: app.toggleHiddenFiles()
@@ -1063,6 +1080,7 @@ proc runAction(app: App, b: Binding) =
   of acSendText: app.sendInput(b.text)
   of acReloadConfig: app.reloadConfig()
   of acOpenConfig: app.openConfig()
+  of acOpenFolderInEditor: app.openFolderInEditor()
   of acToggleFilePane: app.toggleFilePane(focusFirst = true)
   of acToggleHiddenFiles: app.toggleHiddenFiles()
 
@@ -1227,11 +1245,7 @@ proc openPath(app: App, path: string) =
   if dirExists(path):
     app.addTab(dir = path)
     return
-  let editor = getEnv("VISUAL", getEnv("EDITOR"))
-  if editor.len > 0:
-    app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path],
-               dir = path.parentDir)
-  else:
+  if not app.editorTab(path, path.parentDir):
     openExternal(path)
 
 # --- mouse selection ----------------------------------------------------------
@@ -1388,6 +1402,8 @@ proc openMenu(app: App, x, y: int32) =
          maToggleFolderBar),
     item(if app.paneOn: "Hide File Manager" else: "Show File Manager",
          maToggleFilePane, kb.shortcutLabel(acToggleFilePane))] & paneItems & @[
+    item("Open Folder in Editor", maOpenFolderInEditor,
+         kb.shortcutLabel(acOpenFolderInEditor)),
     item("Open Config", maOpenConfig, kb.shortcutLabel(acOpenConfig))] & updateItems,
     int(px), int(py), w, h)
 

@@ -10,7 +10,7 @@ type
     maNone,       ## separators
     maCopy, maPaste, maSelectAll, maZoomIn, maZoomOut, maZoomReset, maOpenConfig,
     maToggleFolderBar, maToggleFilePane, maToggleHiddenFiles, maFilterFiles,
-    maCheckUpdates
+    maOpenFolderInEditor, maCheckUpdates
 
   MenuItem* = object
     label*, shortcut*: string

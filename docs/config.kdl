@@ -144,6 +144,8 @@ copy-on-select #true
 //                           terminal; focus it if shown, hide it if focused
 //   toggle-hidden-files     list dotfiles in the file manager, or stop
 //                           (unbound by default; Ctrl+H in the focused pane)
+//   open-folder-in-editor   open the current folder (the file manager's if
+//                           shown, else the tab's) in $VISUAL/$EDITOR
 //   none                    unbind the chord
 keybinds {
   ctrl+shift+c copy
@@ -165,6 +167,7 @@ keybinds {
   ctrl+shift+, reload-config
   ctrl+, open-config
   ctrl+shift+e toggle-file-pane
+  ctrl+shift+o open-folder-in-editor
 
   // More examples, off until you remove the `/-`:
   /-alt+1 goto-tab 1
