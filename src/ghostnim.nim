@@ -4,7 +4,7 @@
 ## state, scrollback, reflow, key/mouse encoding and produces a render
 ## state; ghostnim supplies the window (SDL2), fonts (SDL_ttf) and the pty.
 
-import std/[os, strutils, posix, sequtils, options, algorithm]
+import std/[os, osproc, strutils, posix, sequtils, options, algorithm]
 from std/times import epochTime, `==`
 from std/unicode import runeLen, runeSubStr
 import ghostnim/[vt, sdl, pty, renderer, input, menu, update, config, keybinds, links,
@@ -632,13 +632,37 @@ proc openExternal(target: string) =
     return
   discard execShellCmd(opener & " " & quoteShell(target) & " >/dev/null 2>&1 &")
 
-proc editorTab(app: App, path: string, dir = ""): bool =
-  ## Run $VISUAL or $EDITOR on `path` in a new tab (in `dir`). False when
-  ## neither is set.
-  let editor = getEnv("VISUAL", getEnv("EDITOR"))
+var shellEditorCache: Option[string]
+
+proc shellEditor(): string =
+  ## $VISUAL or $EDITOR as the user's interactive shell sets them. Started
+  ## from a desktop launcher, ghostnim doesn't inherit what ~/.bashrc and
+  ## friends export, so ask the shell (once).
+  if shellEditorCache.isSome: return shellEditorCache.get
+  var visual, editor = ""
+  let limit = if findExe("timeout").len > 0: "timeout 3 " else: ""
+  try:
+    let (output, _) = execCmdEx(limit & quoteShell(defaultShell()) &
+                                " -ic env </dev/null 2>/dev/null")
+    for line in output.splitLines:
+      if line.startsWith("VISUAL="): visual = line["VISUAL=".len .. ^1]
+      elif line.startsWith("EDITOR="): editor = line["EDITOR=".len .. ^1]
+  except OSError: discard
+  shellEditorCache = some(if visual.len > 0: visual else: editor)
+  shellEditorCache.get
+
+proc editorTab(app: App, path: string, dir = "", fallback = ""): bool =
+  ## Run $VISUAL or $EDITOR (from our environment, else the user's shell,
+  ## else `fallback`) on `path` in a new tab (in `dir`). False when there's
+  ## nothing to run.
+  var editor = getEnv("VISUAL", getEnv("EDITOR"))
+  if editor.len == 0: editor = shellEditor()
+  if editor.len == 0: editor = fallback
   if editor.len == 0: return false
-  # Through sh so an $EDITOR with arguments ("code --wait") works.
-  app.addTab(@["/bin/sh", "-c", "exec " & editor & " \"$1\"", "sh", path], dir)
+  # Through sh so an $EDITOR with arguments ("code --wait") works. If the
+  # editor fails, keep the tab open to show why instead of vanishing.
+  let script = editor & " \"$1\" || { s=$?; printf '\\n[%s exited with status %d; press Enter]' \"$0\" \"$s\"; read _; exit \"$s\"; }"
+  app.addTab(@["/bin/sh", "-c", script, editor, path], dir)
   true
 
 proc openConfig(app: App) =
@@ -659,8 +683,7 @@ proc openFolderInEditor(app: App) =
   let dir = if app.paneOn and app.pane.dir.len > 0: app.pane.dir
             else: app.cur.pty.cwd
   if dir.len == 0 or not dirExists(dir): return
-  if not app.editorTab(dir, dir):
-    app.addTab(@["vi", dir], dir)
+  discard app.editorTab(dir, dir, fallback = "vi")
 
 proc checkConfigChanged(app: App) =
   ## Poll the config file (at most once a second) and reload when it changes.
