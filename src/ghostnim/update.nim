@@ -2,7 +2,7 @@
 ##
 ## Release builds made by CI (compiled with -d:autoUpdate) check GitHub for a
 ## newer AppImage at most once a day, in a detached background process. The
-## latest release carries a .zsync file next to the AppImage; its SHA-1 line
+## `release`-tagged GitHub release carries a .zsync file next to the AppImage; its SHA-1 line
 ## identifies the release build. If it differs from the running AppImage, the
 ## new one is downloaded, verified against that SHA-1 and renamed over the old
 ## file, so the next launch runs it. The running instance is unaffected, since
@@ -42,7 +42,7 @@ if [ -z "$manual" ]; then
   [ -n "$(find "$stamp" -mmin -1440 2>/dev/null)" ] && exit 0
 fi
 touch "$stamp"
-base=https://github.com/""" & updateRepo & """/releases/latest/download/ghostnim-$(uname -m).AppImage
+base=https://github.com/""" & updateRepo & """/releases/download/release/ghostnim-$(uname -m).AppImage
 want=$(curl -fsSL --max-time 30 "$base.zsync" | sed -n 's/^SHA-1: *\([0-9a-f]*\).*/\1/p')
 [ -n "$want" ] || { say "Couldn't check for updates."; exit 0; }
 [ "$(sha1sum "$app" | cut -d' ' -f1)" = "$want" ] && { say "ghostnim is up to date."; exit 0; }

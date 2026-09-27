@@ -1,6 +1,6 @@
 # Build the AppImage on every push and pull request. Pushes to main also
-# publish it as the latest GitHub release, which is where installed AppImages
-# update from (src/ghostnim/update.nim, or AppImageUpdate via the embedded
+# publish it to the GitHub release tagged `release` (replacing its assets),
+# which is where installed AppImages update from (src/ghostnim/update.nim, or AppImageUpdate via the embedded
 # zsync update information).
 name: AppImage
 
@@ -49,7 +49,7 @@ jobs:
       - name: Build AppImage
         env:
           NIM_FLAGS: -d:autoUpdate -d:updateRepo=${{ github.repository }}
-          LDAI_UPDATE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|latest|ghostnim-x86_64.AppImage.zsync
+          LDAI_UPDATE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|release|ghostnim-x86_64.AppImage.zsync
         run: |
           VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' ghostnim.nimble)+${{ github.run_number }}" \
             sh scripts/build-appimage.sh
@@ -82,12 +82,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Date-first names sort chronologically and say when the build is
-          # from; the short SHA ties the release back to its commit.
-          date="$(date -u +%Y-%m-%d)"
-          tag="build-$(date -u +%Y%m%d)-${{ github.run_number }}"
-          gh release create "$tag" "$OUTPUT" "$OUTPUT.zsync" \
-            --target "$GITHUB_SHA" \
-            --title "ghostnim $date #${{ github.run_number }} (${GITHUB_SHA::7})" \
-            --notes "Automated build of ${GITHUB_SHA::7}. Installed AppImages update to this release on their own." \
-            --latest
+          # A single release under the fixed `release` tag: move the tag to
+          # this commit and replace the assets, so the download URLs never
+          # change.
+          tag=release
+          title="ghostnim $(date -u +%Y-%m-%d) #${{ github.run_number }} (${GITHUB_SHA::7})"
+          notes="Automated build of ${GITHUB_SHA::7}. Installed AppImages update to this release on their own."
+          git tag -f "$tag" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$tag"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$OUTPUT" "$OUTPUT.zsync" --clobber
+            gh release edit "$tag" --title "$title" --notes "$notes" --latest
+          else
+            gh release create "$tag" "$OUTPUT" "$OUTPUT.zsync" \
+              --verify-tag --title "$title" --notes "$notes" --latest
+          fi
+
+      - name: Remove versioned releases
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Earlier builds were published as one release per build
+          # (build-YYYYMMDD-N); delete them along with their tags.
+          gh release list --limit 1000 --json tagName --jq '.[].tagName' |
+            grep -v '^release$' |
+            xargs -r -n1 gh release delete --cleanup-tag --yes
