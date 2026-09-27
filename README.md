@@ -172,12 +172,13 @@ other fonts are still found through the host's fontconfig.
 ### Prebuilt AppImage and updates
 
 CI (`.github/workflows/appimage.yml`) builds the AppImage on every push and
-pull request, and each push to `main` publishes it as the latest
-[release](https://github.com/codegod100/ghostnim/releases/latest) as
-`ghostnim-x86_64.AppImage`.
+pull request, and each push to `main` publishes it to the
+[`release`](https://github.com/codegod100/ghostnim/releases/tag/release)
+release as `ghostnim-x86_64.AppImage`, replacing the previous build (there are
+no per-build versioned releases).
 
 Those builds update themselves: at most once a day, on launch, a background
-process compares the running AppImage with the latest release (by the SHA-1
+process compares the running AppImage with the `release` release (by the SHA-1
 in its `.zsync` file). If they differ, it downloads the new AppImage, checks
 it, and replaces the file in place, so the next launch runs the new version.
 This needs `curl` and `sha1sum` on the host and a writable AppImage file; set
