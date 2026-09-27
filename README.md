@@ -174,7 +174,9 @@ process compares the running AppImage with the latest release (by the SHA-1
 in its `.zsync` file). If they differ, it downloads the new AppImage, checks
 it, and replaces the file in place, so the next launch runs the new version.
 This needs `curl` and `sha1sum` on the host and a writable AppImage file; set
-`GHOSTNIM_NO_UPDATE=1` to turn it off. The update information is also
+`GHOSTNIM_NO_UPDATE=1` to turn it off. **Check for Updates** in the
+right-click menu runs the same check right away, and reports the result as a
+desktop notification (via `notify-send`, if installed). The update information is also
 embedded in the AppImage, so AppImageUpdate, Gear Lever and similar tools can
 update it too. Locally built AppImages don't self-update unless built with
 `NIM_FLAGS=-d:autoUpdate`.
