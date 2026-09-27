@@ -34,6 +34,7 @@ type
     acOpenConfig = "open-config"
     acToggleFilePane = "toggle-file-pane"
     acToggleHiddenFiles = "toggle-hidden-files"   ## in the file pane
+    acOpenFolderInEditor = "open-folder-in-editor"
 
   Mod* = enum mCtrl, mShift, mAlt, mSuper
 
@@ -122,6 +123,7 @@ proc defaultKeybinds*(): Keybinds =
   b "ctrl+shift+,", acReloadConfig
   b "ctrl+,", acOpenConfig
   b "ctrl+shift+e", acToggleFilePane
+  b "ctrl+shift+o", acOpenFolderInEditor
 
 proc label(c: Chord): string =
   ## "Ctrl+Shift+C", for showing in the menu.
