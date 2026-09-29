@@ -647,7 +647,7 @@ proc mix(a, b: Rgb, t: float): Rgb =
   template m(x, y: uint8): uint8 = uint8(float(x) + (float(y) - float(x)) * t + 0.5)
   Rgb(r: m(a.r, b.r), g: m(a.g, b.g), b: m(a.b, b.b))
 
-proc tabWidth(rd: Renderer, n: int): int =
+proc tabWidth*(rd: Renderer, n: int): int =
   ## Tabs share the bar right of the "+" button, up to a comfortable maximum.
   max(1, min(32 * rd.cellW, (rd.gridW - rd.tabH) div max(1, n)))
 
@@ -740,9 +740,11 @@ proc drawPlusIcon(rd: Renderer, cx, cy: float, size: float, c: Rgb) =
   rd.strokeSegments([(cx - k, cy, cx + k, cy), (cx, cy - k, cx, cy + k)],
                     max(1.2, 1.6 * rd.scale), c)
 
-proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
+proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int,
+                 dragged = -1, dragOffset = 0) =
   ## Draw the tab bar across the top of the window. Call after `draw`, which
-  ## refreshes the colours from the active terminal.
+  ## refreshes the colours from the active terminal. Tab `dragged`, if any,
+  ## is drawn `dragOffset` pixels off its slot, on top of the others.
   let bg = rgb(rd.colors.background)
   let fg = rgb(rd.colors.foreground)
   let barBg = mix(bg, fg, 0.08)
@@ -758,15 +760,16 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
   rd.fillRect(0, 0, rd.gridW, rd.tabH)
   # The border under the bar, broken where the active tab joins the terminal.
   rd.setColor(mix(bg, fg, 0.2))
-  let activeX = rd.tabH + active * tabW
+  proc tabX(i: int): int = rd.tabH + i * tabW + (if i == dragged: dragOffset else: 0)
+  let activeX = tabX(active)
   rd.fillRect(0, rd.tabH - line, activeX, line)
   rd.fillRect(activeX + tabW, rd.tabH - line, rd.gridW - activeX - tabW, line)
-  if n > 0 and active != 0:
+  if n > 0 and active != 0 and dragged != 0:
     # Divider between the "+" button and the first tab.
     rd.setColor(mix(bg, fg, 0.25))
     rd.fillRect(rd.tabH - line, inset + (rd.tabH - inset) div 4, line, (rd.tabH - inset) div 2)
-  for i, title in titles:
-    let x = rd.tabH + i * tabW
+  proc drawTab(i: int, title: string) =
+    let x = tabX(i)
     let isActive = i == active
     if isActive:
       # Rounded tab, outlined in the border colour, flowing into the terminal.
@@ -774,7 +777,11 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
                         radius, mix(bg, fg, 0.2))
       rd.fillTopRounded(x + inset div 2 + line, inset + line, tabW - inset - 2 * line,
                         rd.tabH - inset - line, radius - line, bg)
-    elif i + 1 != active:
+    elif i == dragged:
+      # A dragged background tab gets a body so it reads as lifted.
+      rd.fillTopRounded(x + inset div 2, inset, tabW - inset, rd.tabH - inset,
+                        radius, mix(bg, fg, 0.14))
+    elif i + 1 != active and i + 1 != dragged:
       rd.setColor(mix(bg, fg, 0.25))
       rd.fillRect(x + tabW - line, inset + (rd.tabH - inset) div 4, line, (rd.tabH - inset) div 2)
     let textFg = if isActive: fg else: mix(bg, fg, 0.6)
@@ -787,6 +794,9 @@ proc drawTabBar*(rd: Renderer, titles: openArray[string], active: int) =
                     if isActive: faceBold else: faceRegular)
     rd.drawCloseIcon(float(x + tabW - inset div 2) - closeW.float / 2,
                      textY.float + rd.cellH.float / 2, iconSize, textFg)
+  for i, title in titles:
+    if i != dragged: drawTab(i, title)
+  if dragged in 0 ..< n: drawTab(dragged, titles[dragged])
   rd.drawPlusIcon(rd.tabH.float / 2,
                   textY.float + rd.cellH.float / 2, iconSize * 1.2, mix(bg, fg, 0.6))
 
