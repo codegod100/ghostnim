@@ -176,6 +176,12 @@ type
     resizeCursor: ptr SdlCursor
     dirsChecked: uint32        ## ticks of the last look at the tabs' directories
     folderHover: int           ## recent-folder chip under the pointer, -1 for none
+    ## Tab dragging: the id of the tab held down in the tab bar (-1: none),
+    ## where the pointer grabbed it and where the press was (output pixels).
+    dragTab: int32
+    dragGrab, dragStartX: int
+    tabDragging: bool          ## the pointer has moved far enough to drag
+    dragOffset: int            ## the dragged tab's distance from its slot
     ## The file manager pane.
     pane: FilePane
     paneOn: bool
@@ -442,6 +448,16 @@ proc closeTab(app: App, i: int) =
     return
   if app.active > i or app.active >= app.tabs.len: dec app.active
   app.activate(app.active)
+
+proc moveTab(app: App, i, j: int) =
+  ## Move tab `i` to position `j`, keeping the same tab active.
+  if i == j: return
+  let tab = app.tabs[i]
+  app.tabs.delete(i)
+  app.tabs.insert(tab, j)
+  if app.active == i: app.active = j
+  elif i < app.active and app.active <= j: dec app.active
+  elif j <= app.active and app.active < i: inc app.active
 
 proc cycleTab(app: App, delta: int) =
   let n = app.tabs.len
@@ -1358,7 +1374,14 @@ proc onTabBarClick(app: App, button, clicks: uint8, x, y: int32) =
   let hit = app.rd.hitTabBar(app.tabs.len, px.int, py.int)
   case hit.kind
   of hitTab:
-    if button == BUTTON_LEFT: app.activate(hit.index)
+    if button == BUTTON_LEFT:
+      app.activate(hit.index)
+      # Hold it to drag it along the bar.
+      app.dragTab = app.tabs[hit.index].id
+      app.dragGrab = px.int - (app.rd.tabH + hit.index * app.rd.tabWidth(app.tabs.len))
+      app.dragStartX = px.int
+      app.tabDragging = false
+      app.dragOffset = 0
     elif button == BUTTON_MIDDLE: app.closeTab(hit.index)
   of hitClose:
     if button in {BUTTON_LEFT, BUTTON_MIDDLE}: app.closeTab(hit.index)
@@ -1367,6 +1390,37 @@ proc onTabBarClick(app: App, button, clicks: uint8, x, y: int32) =
   of hitNone:
     # Double-clicking the empty bar space opens a new tab.
     if button == BUTTON_LEFT and clicks == 2: app.addTab()
+
+proc endTabDrag(app: App) =
+  app.dragTab = -1
+  app.tabDragging = false
+  app.dragOffset = 0
+
+proc dragTabTo(app: App, x: int32) =
+  ## The pointer moved while holding a tab: slide it along the bar, moving
+  ## it past the tabs whose middle it crosses.
+  var i = -1
+  for k, tab in app.tabs:
+    if tab.id == app.dragTab: i = k
+  if i < 0:
+    app.endTabDrag()          # it closed under us
+    return
+  let px = app.pixelPos(x, 0)[0].int
+  if not app.tabDragging and abs(px - app.dragStartX) < max(4, app.rd.cellW div 2): return
+  app.tabDragging = true
+  let n = app.tabs.len
+  let tabW = app.rd.tabWidth(n)
+  let left = clamp(px - app.dragGrab, app.rd.tabH, app.rd.tabH + (n - 1) * tabW)
+  let slot = clamp((left - app.rd.tabH + tabW div 2) div tabW, 0, n - 1)
+  app.moveTab(i, slot)
+  app.dragOffset = left - (app.rd.tabH + slot * tabW)
+
+proc draggedIndex(app: App): int =
+  ## The index of the tab being dragged, or -1.
+  if not app.tabDragging: return -1
+  for k, tab in app.tabs:
+    if tab.id == app.dragTab: return k
+  -1
 
 proc sendMouse(app: App, action: cint, button: cint, x, y: int32) =
   let ev = app.mouseEvent
@@ -1485,6 +1539,7 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     if e.button == BUTTON_LEFT and app.resizingPane:
       app.resizingPane = false
       app.savePaneState()
+    if e.button == BUTTON_LEFT and app.dragTab >= 0: app.endTabDrag()
     return
   if down: app.mouseButtons.incl e.button else: app.mouseButtons.excl e.button
   if app.menu.open:
@@ -1503,6 +1558,9 @@ proc onMouseButton(app: App, e: MouseButtonEvent, down: bool) =
     app.openMenu(e.x, e.y)
 
 proc onMouseMotion(app: App, e: MouseMotionEvent) =
+  if app.dragTab >= 0 and BUTTON_LEFT in app.ownButtons:
+    app.dragTabTo(e.x)
+    return
   if app.resizingPane: app.dragDivider(e.x)
   let (mx, my) = app.pixelPos(e.x, e.y)
   let idle = not app.menu.open and app.mouseButtons.len == 0 and app.ownButtons.len == 0
@@ -1646,7 +1704,7 @@ proc main() =
   defer: ttfQuit()
 
   let app = App(opts: opts, cli: cli, configStamp: cfgStamp, running: true,
-                needsFull: true, folderHover: -1, pane: initFilePane(), paneTab: -1,
+                needsFull: true, folderHover: -1, dragTab: -1, pane: initFilePane(), paneTab: -1,
                 windowFocused: true)
   app.loadPaneState()
   let fontPaths = resolveFonts(opts.font)
@@ -1709,7 +1767,7 @@ proc main() =
     app.syncPane()
     app.rd.draw(app.cur.state, app.cur.term, app.needsFull, blinkOn)
     app.pane.draw(app.rd, app.outputSize()[1], app.paneFocused and app.windowFocused)
-    app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active)
+    app.rd.drawTabBar(app.tabs.mapIt(it.title), app.active, app.draggedIndex(), app.dragOffset)
     app.rd.drawFolderBar(app.folderLabels, app.folderHover)
     app.menu.draw(app.rd)
     app.needsFull = false

@@ -57,8 +57,8 @@ the event loop.
 - Scrollback with the mouse wheel or Shift+PageUp/PageDown.
 - Tabs, each with its own shell and terminal state. The tab bar shows each
   tab's OSC title. Click a tab to switch to it, click × (or middle-click the
-  tab) to close it, and click + to open a new one. The mouse wheel over the bar
-  also switches tabs. New tabs start in the current tab's directory.
+  tab) to close it, and click + to open a new one. Drag a tab along the bar to
+  reorder it. The mouse wheel over the bar also switches tabs. New tabs start in the current tab's directory.
   Keys: Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Tab /
   Ctrl+Shift+Tab (or Ctrl+PageDown / Ctrl+PageUp) next / previous tab.
 - Recent folders: a strip under the tabs shows the directories you've been in,
