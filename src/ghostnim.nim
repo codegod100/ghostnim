@@ -165,6 +165,11 @@ type
     selUnit: SelectUnit
     ## The word or line first clicked, which a word/line drag always keeps.
     selAnchorStart, selAnchorEnd: (int, int)
+    ## The viewport has scrolled mid-drag, so the anchor's viewport cell is
+    ## stale: the drag now moves the selection's own end (which libghostty
+    ## tracks through scrolling) instead. `selBackward`: that end is `start`.
+    selScrolled, selBackward: bool
+    lastAutoScroll: uint32
     mouseButtons: set[uint8]
     ## Buttons whose press we handled ourselves (tab bar, Ctrl+click on a
     ## link); their release is ours too, not the terminal's.
@@ -1309,6 +1314,8 @@ proc startSelection(app: App, cell: (int, int), clicks: uint8) =
   ## A left press: one click starts a cell selection, two select the word
   ## under the pointer, three the line.
   app.selecting = true
+  app.selScrolled = false
+  app.selBackward = false
   app.selAnchor = cell
   app.selUnit = case clicks
                 of 0, 1: suCell
@@ -1320,15 +1327,56 @@ proc startSelection(app: App, cell: (int, int), clicks: uint8) =
   (app.selAnchorStart, app.selAnchorEnd) = app.unitAt(cell)
   app.setSelection(app.selAnchorStart, app.selAnchorEnd)
 
+proc moveSelectionEnd(app: App, cell: (int, int)): bool =
+  ## Point the dragged end of the selection at viewport `cell`, keeping the
+  ## other end where it is even if the viewport has scrolled since.
+  var sel = initSized(GhosttySelection)
+  if ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_SELECTION, addr sel) != GHOSTTY_SUCCESS:
+    return false
+  let (ok, r) = app.gridRef(cell[0], cell[1])
+  if not ok: return false
+  if app.selBackward: sel.start = r else: sel.`end` = r
+  ghostty_terminal_set(app.cur.term, GHOSTTY_TERMINAL_OPT_SELECTION, addr sel) == GHOSTTY_SUCCESS
+
 proc extendSelection(app: App, cell: (int, int)) =
   ## A drag: select from the anchor to `cell`, by whole words or lines after
   ## a double or triple click.
+  if app.selScrolled and app.moveSelectionEnd(cell): return
   if app.selUnit == suCell:
     app.setSelection(app.selAnchor, cell)
     return
   let (a, b) = app.unitAt(cell)
-  if a.before(app.selAnchorStart): app.setSelection(a, app.selAnchorEnd)
+  app.selBackward = a.before(app.selAnchorStart)
+  if app.selBackward: app.setSelection(a, app.selAnchorEnd)
   else: app.setSelection(app.selAnchorStart, if b.before(app.selAnchorEnd): app.selAnchorEnd else: b)
+
+proc reportMouse(app: App): bool
+
+proc autoScrollSelection(app: App) =
+  ## While a drag is held above or below the grid, scroll the viewport
+  ## (faster the further out the pointer is) and extend the selection to the
+  ## edge row, so it can grow past what fits on screen.
+  if not app.selecting or app.reportMouse() or app.menu.open: return
+  let now = getTicks()
+  if now - app.lastAutoScroll < 40: return
+  var x, y: cint
+  discard getMouseState(addr x, addr y)
+  let (px, py) = app.pixelPos(x, y)
+  var rows: uint16
+  discard ghostty_terminal_get(app.cur.term, GHOSTTY_TERMINAL_DATA_ROWS, addr rows)
+  let top = float(app.rd.top + app.rd.pad)
+  let bottom = top + float(rows.int * app.rd.cellH)
+  let cellH = app.rd.cellH.float
+  var lines = 0
+  if py < top: lines = -clamp(1 + int((top - py) / cellH), 1, 8)
+  elif py >= bottom: lines = clamp(1 + int((py - bottom) / cellH), 1, 8)
+  if lines == 0: return
+  app.lastAutoScroll = now
+  app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, lines)
+  app.selScrolled = true
+  var cell = app.cellAt(x, y)
+  cell[1] = if lines < 0: 0 else: max(0, rows.int - 1)
+  discard app.moveSelectionEnd(cell)
 
 proc finishSelection(app: App) =
   ## The button went up: copy what was selected, with copy-on-select.
@@ -1608,6 +1656,7 @@ proc onMouseWheel(app: App, e: MouseWheelEvent) =
     for _ in 1 .. abs(dy):
       app.sendMouse(GHOSTTY_MOUSE_ACTION_PRESS, button, x, y)
   else:
+    if app.selecting: app.selScrolled = true
     app.scrollViewport(GHOSTTY_SCROLL_VIEWPORT_DELTA, -3 * dy)
 
 proc handleEvent(app: App, e: var Event) =
@@ -1752,7 +1801,8 @@ proc main() =
   var blinkOn = true
   var ev: Event
   while app.running:
-    let timeout = if app.rd.cursorBlinking(app.cur.state): cint(blinkIntervalMs) else: cint(1000)
+    var timeout = if app.rd.cursorBlinking(app.cur.state): cint(blinkIntervalMs) else: cint(1000)
+    if app.selecting: timeout = min(timeout, 40)   # keep autoscrolling a held drag
     if waitEventTimeout(addr ev, timeout) != 0:
       app.handleEvent(ev)
       while app.running and pollEvent(addr ev) != 0:
@@ -1762,6 +1812,7 @@ proc main() =
       blinkOn = not blinkOn
       lastBlink = now
     if not app.running: break
+    app.autoScrollSelection()
     if opts.screenshot.len == 0: app.checkConfigChanged()
     app.trackDirs()
     app.syncPane()
